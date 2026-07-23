@@ -1,3 +1,51 @@
+cat >> .gitignore <<'EOF'
+
+# LiDAR datasets and recordings
+/data/
+*.bag
+*.db3
+*.mcap
+*.bin
+
+# Model weights and deployment binaries
+/checkpoints/
+*.pth
+*.pt
+*.onnx
+*.engine
+*.plan
+
+# Generated metadata and arrays
+*.pkl
+*.npy
+*.npz
+
+# Training, evaluation and visualisation outputs
+/work_dirs/
+/outputs/
+*.log
+
+# Local environment and caches
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# ROS build artifacts
+/build/
+/install/
+/log/
+
+# Editors
+.vscode/
+.idea/
+EOF
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
