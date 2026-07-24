@@ -27,7 +27,7 @@ Run MMDetection3D commands from the repository root because the current
 configuration intentionally keeps dataset paths relative to that directory:
 
 ```text
-research/configs/pointpillars/pointpillars_kitti_car.py
+
 ```
 
 Future CenterPoint configurations that use the custom 7D head must opt in:
