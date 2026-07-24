@@ -1,0 +1,23 @@
+{
+  "backend": "tensorrt",
+  "point_features": [
+    "x",
+    "y",
+    "z",
+    "intensity"
+  ],
+  "point_cloud_range": [
+    0,
+    -39.68,
+    -3,
+    69.12,
+    39.68,
+    1
+  ],
+  "classes": [
+    "Car"
+  ],
+  "box_format": "x,y,z_bottom,dx,dy,dz,yaw",
+  "score_threshold": 0.3,
+  "model_file": "model.engine"
+}

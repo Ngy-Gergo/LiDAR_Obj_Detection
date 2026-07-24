@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==69.5.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lidar-model-selection"
+version = "0.0.0"
+description = "Training, evaluation, benchmarking, and offline model-selection tools."
+requires-python = "==3.10.*"
+dependencies = [
+  "mmcv==2.1.0",
+  "mmdet==3.3.0",
+  "mmdet3d==1.4.0",
+  "mmengine==0.10.7",
+  "numpy==1.26.4",
+  "torch==2.1.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+lidar-kitti-eval = "lidar_model_selection.compat.kitti_evaluator:main"
+lidar-offline-detect = "lidar_model_selection.playback.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

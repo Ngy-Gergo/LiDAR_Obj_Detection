@@ -14,6 +14,11 @@
 *.engine
 *.plan
 
+# Exported runtime artifacts
+/artifacts/*
+!/artifacts/README.md
+!/artifacts/model-contract.example.json
+
 # Generated metadata and arrays
 *.pkl
 *.npy
@@ -22,6 +27,8 @@
 # Training, evaluation and visualisation outputs
 /work_dirs/
 /outputs/
+/research/work_dirs/
+/research/outputs/
 *.log
 
 # Local environment and caches
@@ -39,6 +46,8 @@ __pycache__/
 /build/
 /install/
 /log/
+/runtime/install/
+/runtime/log/
 
 # Editors
 .vscode/
