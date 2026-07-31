@@ -8,6 +8,7 @@ version = "0.0.0"
 description = "Training, evaluation, benchmarking, and offline model-selection tools."
 requires-python = "==3.10.*"
 dependencies = [
+  "matplotlib==3.10.9",
   "mmcv==2.1.0",
   "mmdet==3.3.0",
   "mmdet3d==1.4.0",

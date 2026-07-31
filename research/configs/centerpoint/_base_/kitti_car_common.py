@@ -263,20 +263,36 @@ auto_scale_lr = dict(
 # Runtime configuration used during research
 # ---------------------------------------------------------------------------
 
+primary_metric = (
+    "Kitti metric/pred_instances_3d/KITTI/"
+    "Car_3D_AP40_moderate_strict"
+)
+
 default_hooks = dict(
     timer=dict(type="IterTimerHook"),
+
     logger=dict(
         type="LoggerHook",
         interval=50,
     ),
+
     param_scheduler=dict(type="ParamSchedulerHook"),
+
     checkpoint=dict(
         type="CheckpointHook",
         interval=1,
-        max_keep_ckpts=3,
+        by_epoch=True,
+        save_last=True,
+        save_best=primary_metric,
+        rule="greater",
+        max_keep_ckpts=2,
     ),
+
     sampler_seed=dict(type="DistSamplerSeedHook"),
-    visualization=dict(type="Det3DVisualizationHook"),
+
+    visualization=dict(
+        type="Det3DVisualizationHook",
+    ),
 )
 
 env_cfg = dict(
