@@ -1,5 +1,10 @@
 # LiDAR CenterPoint
 
+> **Architecture recovery checkpoint:** the detailed command guide below still
+> documents the legacy GitHub workflow and must not be used for new work.
+> The validated run-owned implementation and exact continuation state are in
+> [research/PROGRESS.md](research/PROGRESS.md).
+
 This repository separates CenterPoint research from the future vehicle
 runtime. Run all research commands from the repository root because the KITTI
 dataset paths in the MMDetection3D configs are repository-relative.

@@ -11,6 +11,8 @@ from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 
+from ..evaluation import DEFAULT_RUNS_ROOT
+from ..runs import validate_run_id
 from .detector import Mmdet3dDetector
 from .frame_source import DirectoryFrameSource
 from .results import FrameResult
@@ -20,8 +22,11 @@ class KittiDetectionNode(Node):
     def __init__(self) -> None:
         super().__init__("kitti_detection")
 
-        config_path = self.declare_parameter("config_path", "").value
-        checkpoint_path = self.declare_parameter("checkpoint_path", "").value
+        run_id = self.declare_parameter("run_id", "").value
+        runs_root = self.declare_parameter(
+            "runs_root",
+            str(DEFAULT_RUNS_ROOT),
+        ).value
         input_dir = self.declare_parameter("input_dir", "").value
         device = self.declare_parameter("device", "cuda:0").value
         score_threshold = self.declare_parameter("score_threshold", 0.3).value
@@ -31,10 +36,13 @@ class KittiDetectionNode(Node):
         loop = self.declare_parameter("loop", True).value
         ros_frame_id = self.declare_parameter("frame_id", "lidar").value
 
-        if not config_path.strip():
-            raise ValueError("config_path must contain non-whitespace text")
-        if not checkpoint_path.strip():
-            raise ValueError("checkpoint_path must contain non-whitespace text")
+        if not isinstance(run_id, str):
+            raise TypeError("run_id must be a string")
+        validate_run_id(run_id)
+        if not isinstance(runs_root, str):
+            raise TypeError("runs_root must be a string")
+        if not runs_root.strip():
+            raise ValueError("runs_root must contain non-whitespace text")
         if not input_dir.strip():
             raise ValueError("input_dir must contain non-whitespace text")
         if max_frames < 0:
@@ -55,8 +63,7 @@ class KittiDetectionNode(Node):
             raise ValueError("no matching LiDAR frames were found")
 
         self._detector = Mmdet3dDetector(
-            config_path=Path(config_path),
-            checkpoint_path=Path(checkpoint_path),
+            run=Path(runs_root) / run_id,
             device=device,
             score_threshold=score_threshold,
         )

@@ -1,126 +1,119 @@
-"""Benchmark one or all CenterPoint models on one selected GPU."""
+"""Benchmark one explicit completed canonical run."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-RESEARCH_SOURCE = REPOSITORY_ROOT / "research/src"
+RESEARCH_ROOT = REPOSITORY_ROOT / "research"
+RESEARCH_SOURCE = RESEARCH_ROOT / "src"
+
 if str(RESEARCH_SOURCE) not in sys.path:
     sys.path.insert(0, str(RESEARCH_SOURCE))
 
+from lidar_model_selection.benchmarking import (  # noqa: E402
+    DEFAULT_RUNS_ROOT,
+    benchmark_run,
+)
+from lidar_model_selection.runs import validate_run_id  # noqa: E402
 
-def nonnegative_integer(value: str) -> int:
+
+def run_id_argument(value: str) -> str:
     try:
-        result = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"expected an integer, got {value!r}"
-        ) from exc
-    if result < 0:
-        raise argparse.ArgumentTypeError("must be zero or greater")
-    return result
+        return validate_run_id(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def positive_integer(value: str) -> int:
-    result = nonnegative_integer(value)
-    if result == 0:
-        raise argparse.ArgumentTypeError("must be one or greater")
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected an integer, got {value!r}"
+        ) from error
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
     return result
+
+
+def gpu_visibility_argument(value: str) -> str:
+    if not value or value.strip() != value or "\0" in value:
+        raise argparse.ArgumentTypeError(
+            "GPU visibility must be non-empty canonical text"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Benchmark one or all trained CenterPoint models."
+        description="Benchmark one explicit completed canonical run."
     )
     parser.add_argument(
-        "config",
-        nargs="?",
-        type=Path,
-        help="CenterPoint config for a single-model benchmark.",
-    )
-    parser.add_argument(
-        "checkpoint",
-        nargs="?",
-        type=Path,
-        help="Checkpoint for a single-model benchmark.",
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Benchmark all models with discoverable checkpoints.",
-    )
-    parser.add_argument(
-        "--gpu",
-        type=nonnegative_integer,
-        default=0,
-        help="Physical CUDA GPU index (default: 0).",
+        "--run",
+        dest="run_id",
+        required=True,
+        type=run_id_argument,
+        metavar="RUN_ID",
+        help="Canonical completed run ID to benchmark.",
     )
     parser.add_argument(
         "--warmup",
-        type=nonnegative_integer,
-        default=100,
-        help="Warm-up batch count (default: 100).",
+        required=True,
+        type=positive_integer,
+        metavar="COUNT",
+        help="Positive number of leading warm-up samples.",
     )
     parser.add_argument(
         "--samples",
+        required=True,
         type=positive_integer,
-        default=1000,
-        help="Measured batch count (default: 1000).",
+        metavar="COUNT",
+        help="Positive number of consecutive measured samples.",
     )
     parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("research/benchmarks"),
-        help="Output directory (default: research/benchmarks).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the benchmark plan without inference.",
+        "--gpu",
+        type=gpu_visibility_argument,
+        metavar="VISIBILITY",
+        help="Optional CUDA_VISIBLE_DEVICES value set before ML imports.",
     )
     return parser
 
 
-def validate_arguments(
-    parser: argparse.ArgumentParser,
-    args: argparse.Namespace,
-) -> None:
-    if args.all and (
-        args.config is not None or args.checkpoint is not None
-    ):
-        parser.error("--all cannot be used with CONFIG or CHECKPOINT")
-    if not args.all and (
-        args.config is None or args.checkpoint is None
-    ):
-        parser.error(
-            "single-model benchmarking requires CONFIG and CHECKPOINT"
-        )
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    validate_arguments(parser, args)
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+    arguments = build_parser().parse_args(argv)
+    if arguments.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = arguments.gpu
 
-    from lidar_model_selection.benchmarking import run_benchmark
+    try:
+        record = benchmark_run(
+            DEFAULT_RUNS_ROOT / arguments.run_id,
+            warmup=arguments.warmup,
+            samples=arguments.samples,
+        )
+    except Exception as error:
+        print(
+            f"ERROR: benchmark could not be recorded: "
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        return 1
 
-    return run_benchmark(
-        config_path=args.config,
-        checkpoint_path=args.checkpoint,
-        all_models=args.all,
-        gpu_index=args.gpu,
-        warmup=args.warmup,
-        samples=args.samples,
-        output_dir=args.output_dir,
-        dry_run=args.dry_run,
+    print(
+        f"RESULT: run={record.binding.run_id} "
+        f"result={record.result_id} status={record.status}"
     )
+    if record.failure is not None:
+        print(
+            f"ERROR: {record.failure.error_type}: {record.failure.message}",
+            file=sys.stderr,
+        )
+    return 0 if record.successful else 1
 
 
 if __name__ == "__main__":

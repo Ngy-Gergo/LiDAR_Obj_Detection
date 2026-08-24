@@ -1,495 +1,590 @@
-"""Direct MMDetection3D latency benchmarking for CenterPoint models."""
+"""Run-bound synchronized MMDetection3D latency benchmarking."""
 
 from __future__ import annotations
 
-import csv
 import gc
-import json
+import importlib
+import math
+import os
+import sys
 import tempfile
 import time
-from dataclasses import dataclass
+import traceback
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
-import numpy as np
+from .checkpoints import CheckpointArtifact, verify_checkpoint
+from .provenance import (
+    CodeProvenance,
+    EnvironmentInfo,
+    capture_code_provenance,
+    capture_environment,
+)
+from .results import (
+    ResultFailure,
+    ResultRecord,
+    binding_for_run,
+    create_result,
+    publish_result,
+)
+from .runs import Run, load_run
 
-from lidar_model_selection.checkpoints import (
-    CENTERPOINT_MODELS,
-    discover_checkpoint,
-    is_usable_checkpoint,
+
+__all__ = (
+    "DEFAULT_REPOSITORY_ROOT",
+    "DEFAULT_RUNS_ROOT",
+    "BENCHMARK_SCHEMA_VERSION",
+    "METHODOLOGY_ID",
+    "METHODOLOGY_VERSION",
+    "METHODOLOGY_KEY",
+    "latency_statistics",
+    "benchmark_run",
+)
+
+DEFAULT_REPOSITORY_ROOT = Path(__file__).absolute().parents[3]
+DEFAULT_RUNS_ROOT = DEFAULT_REPOSITORY_ROOT / "research" / "runs"
+
+BENCHMARK_SCHEMA_VERSION = 1
+METHODOLOGY_ID = "mmdet3d_prediction_e2e_sync"
+METHODOLOGY_VERSION = 1
+METHODOLOGY_KEY = f"{METHODOLOGY_ID}_v{METHODOLOGY_VERSION}"
+
+_TWENTY_HZ_THRESHOLD_MS = 50.0
+_CORE_PACKAGES = ("torch", "mmengine", "mmcv", "mmdet", "mmdet3d")
+_PROVENANCE_SCOPES = (
+    "research/src/lidar_model_selection/benchmarking.py",
+    "research/src/lidar_model_selection/checkpoints.py",
+    "research/src/lidar_model_selection/compat",
+    "research/src/lidar_model_selection/provenance.py",
+    "research/src/lidar_model_selection/results.py",
+    "research/src/lidar_model_selection/runs.py",
+    "research/tools/benchmark.py",
 )
 
 
-RESEARCH_ROOT = Path(__file__).resolve().parents[2]
-REPOSITORY_ROOT = RESEARCH_ROOT.parent
-PREDICTION_SCOPE = (
-    "model.test_step: preprocessing + voxelization + network forward + "
-    "box decoding + NMS/postprocessing"
-)
-END_TO_END_SCOPE = (
-    "framework dataloader retrieval + CPU transforms + collation + "
-    + PREDICTION_SCOPE
-)
-SUMMARY_FIELDS = (
-    "model",
-    "checkpoint",
-    "checkpoint_selection_type",
-    "success",
-    "error",
-    "samples",
-    "prediction_p50_ms",
-    "prediction_p95_ms",
-    "prediction_p99_ms",
-    "end_to_end_mean_ms",
-    "end_to_end_p50_ms",
-    "end_to_end_p95_ms",
-    "end_to_end_p99_ms",
-    "percentage_over_50ms",
-    "meets_20hz",
-    "peak_memory_allocated_mb",
-    "peak_memory_reserved_mb",
-    "checkpoint_size_mb",
-    "gpu_name",
-)
+def _timestamp() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-@dataclass(frozen=True)
-class BenchmarkPlan:
-    model: str
-    config_path: Path
-    checkpoint_path: Path | None
-    checkpoint_selection_type: str | None
+def _require_positive_integer(value: object, *, description: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{description} must be an integer and not a boolean")
+    if value <= 0:
+        raise ValueError(f"{description} must be greater than zero")
+    return value
 
 
-def resolve_output_dir(path: Path) -> Path:
-    if path.is_absolute():
-        return path.resolve()
-    return (REPOSITORY_ROOT / path).resolve()
+def _finite_nonnegative(value: object, *, description: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{description} must be a real number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{description} must be finite")
+    if normalized < 0.0:
+        raise ValueError(f"{description} must be non-negative")
+    return normalized
 
 
-def _display_path(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    resolved = path.resolve()
-    try:
-        return str(resolved.relative_to(REPOSITORY_ROOT))
-    except ValueError:
-        return str(resolved)
-
-
-def build_plans(
-    config_path: Path | None, checkpoint_path: Path | None, all_models: bool
-) -> list[BenchmarkPlan]:
-    if not all_models:
-        if config_path is None or checkpoint_path is None:
-            raise ValueError("CONFIG and CHECKPOINT are required.")
-        return [
-            BenchmarkPlan(
-                config_path.stem,
-                config_path.resolve(),
-                checkpoint_path.resolve(),
-                "explicit",
-            )
-        ]
-
-    plans = []
-    for model in CENTERPOINT_MODELS:
-        choice = discover_checkpoint(model)
-        plans.append(
-            BenchmarkPlan(
-                model.name,
-                model.config_path.resolve(),
-                choice.path if choice else None,
-                choice.selection if choice else None,
-            )
-        )
-    return plans
-
-
-def _validate_cuda(gpu_index: int) -> tuple[str, str, str | None]:
-    import torch
-
-    if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise RuntimeError(
-            f"GPU {gpu_index} is unavailable; expected exactly one "
-            "CUDA-visible device after CUDA_VISIBLE_DEVICES selection."
-        )
-    torch.cuda.set_device(0)
+def _percentile(sorted_values: Sequence[float], percentile: float) -> float:
+    position = (len(sorted_values) - 1) * (percentile / 100.0)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return sorted_values[lower]
+    fraction = position - lower
     return (
-        torch.cuda.get_device_name(0),
-        str(torch.__version__),
-        str(torch.version.cuda) if torch.version.cuda is not None else None,
+        sorted_values[lower] * (1.0 - fraction)
+        + sorted_values[upper] * fraction
     )
 
 
-def latency_statistics(values: Sequence[float]) -> dict[str, Any]:
-    samples = np.asarray(values, dtype=np.float64)
-    if samples.size == 0:
-        raise ValueError("No latency measurements were recorded.")
-    return {
-        "count": int(samples.size),
-        "mean_ms": float(np.mean(samples)),
-        "min_ms": float(np.min(samples)),
-        "max_ms": float(np.max(samples)),
-        "p50_ms": float(np.percentile(samples, 50)),
-        "p95_ms": float(np.percentile(samples, 95)),
-        "p99_ms": float(np.percentile(samples, 99)),
-        "standard_deviation_ms": float(np.std(samples)),
+def latency_statistics(values: Sequence[float]) -> dict[str, object]:
+    """Return strict finite latency statistics in milliseconds.
+
+    Percentiles use linear interpolation at ``(n - 1) * q`` and the standard
+    deviation is the population value (``ddof=0``).
+    """
+    if isinstance(values, (str, bytes, bytearray)):
+        raise TypeError("latency measurements must be a sequence of numbers")
+    samples = tuple(
+        _finite_nonnegative(value, description="latency measurement")
+        for value in values
+    )
+    if not samples:
+        raise ValueError("at least one latency measurement is required")
+
+    ordered = tuple(sorted(samples))
+    mean = math.fsum(samples) / len(samples)
+    variance = math.fsum((value - mean) ** 2 for value in samples) / len(samples)
+    statistics = {
+        "count": len(samples),
+        "mean_ms": mean,
+        "min_ms": ordered[0],
+        "max_ms": ordered[-1],
+        "p50_ms": _percentile(ordered, 50.0),
+        "p95_ms": _percentile(ordered, 95.0),
+        "p99_ms": _percentile(ordered, 99.0),
+        "standard_deviation_ms": math.sqrt(variance),
     }
+    for name, value in statistics.items():
+        if name != "count":
+            _finite_nonnegative(value, description=f"computed statistic {name}")
+    return statistics
 
 
-def load_runner(plan: BenchmarkPlan, work_dir: str) -> tuple[Any, Any]:
-    from lidar_model_selection.compat.kitti_evaluator import install
-    from mmengine.config import Config
-    from mmengine.runner import Runner
-    from mmengine.utils import import_modules_from_strings
-
-    install()
-    from mmdet3d.utils import register_all_modules
-
-    register_all_modules(init_default_scope=True)
-    cfg = Config.fromfile(str(plan.config_path))
-    cfg.load_from = str(plan.checkpoint_path)
-    cfg.resume = False
-    cfg.launcher = "none"
-    cfg.work_dir = work_dir
-    cfg.test_dataloader.batch_size = 1
-    cfg.test_dataloader.num_workers = 0
-    cfg.test_dataloader.persistent_workers = False
-    cfg.test_dataloader.drop_last = False
-    cfg.test_dataloader.sampler.shuffle = False
-    if cfg.get("custom_imports"):
-        import_modules_from_strings(**cfg.custom_imports)
-
-    runner = Runner.from_cfg(cfg)
-    runner.load_or_resume()
-    return runner, runner.build_test_loop(cfg.test_cfg)
+def _value(container: object, key: str, default: object = None) -> Any:
+    if isinstance(container, Mapping):
+        return container.get(key, default)
+    return getattr(container, key, default)
 
 
-def _checkpoint_size(path: Path | None) -> float | None:
+def _set_value(container: object, key: str, value: object) -> None:
     try:
-        return path.stat().st_size / 1024**2 if path else None
-    except OSError:
-        return None
+        container[key] = value  # type: ignore[index]
+    except (AttributeError, TypeError):
+        setattr(container, key, value)
 
 
-def _result(
-    plan: BenchmarkPlan, gpu_index: int,
-    gpu: tuple[str, str, str | None],
-    warmup: int, samples: int,
+def _load_canonical_run(run: Run | Path | str) -> Run:
+    if isinstance(run, Run):
+        return load_run(run.paths.root)
+    if not isinstance(run, (Path, str)):
+        raise TypeError("run must be a loaded Run or an explicit run directory")
+    return load_run(run)
+
+
+def _checkpoint_path(run: Run, artifact: CheckpointArtifact) -> Path:
+    reference = Path(artifact.path)
+    root = None if reference.is_absolute() else run.paths.root
+    mismatches = verify_checkpoint(artifact, root=root)
+    if mismatches:
+        details = "; ".join(
+            f"{mismatch.field}: expected {mismatch.expected!r}, "
+            f"observed {mismatch.actual!r}"
+            for mismatch in mismatches
+        )
+        raise ValueError(f"selected checkpoint identity mismatch: {details}")
+    if reference.is_absolute():
+        return Path(os.path.abspath(os.fspath(reference)))
+    return Path(os.path.abspath(os.fspath(run.paths.root / reference)))
+
+
+def _require_execution_inputs_unchanged(
+    run: Run,
+    checkpoint_path: Path,
+) -> None:
+    """Reverify the exact config and checkpoint just before runner creation."""
+    current = load_run(run.paths.root)
+    if current.manifest != run.manifest:
+        raise ValueError("run manifest changed before benchmarking")
+    selected = current.selected_checkpoint
+    if selected is None:
+        raise ValueError("run no longer has a selected checkpoint")
+    if _checkpoint_path(current, selected) != checkpoint_path:
+        raise ValueError("selected checkpoint path changed before benchmarking")
+
+
+def _capture_initial_evidence() -> tuple[CodeProvenance, EnvironmentInfo]:
+    return (
+        capture_code_provenance(DEFAULT_REPOSITORY_ROOT, _PROVENANCE_SCOPES),
+        capture_environment(
+            include_packages=True,
+            include_torch=False,
+            package_names=_CORE_PACKAGES,
+        ),
+    )
+
+
+def _capture_execution_environment() -> EnvironmentInfo:
+    return capture_environment(
+        include_packages=True,
+        include_torch=True,
+        package_names=_CORE_PACKAGES,
+    )
+
+
+def _cleanup_cuda() -> None:
+    """Best-effort release without importing Torch solely for cleanup."""
+    try:
+        gc.collect()
+        torch = sys.modules.get("torch")
+        cuda = None if torch is None else getattr(torch, "cuda", None)
+        empty_cache = None if cuda is None else getattr(cuda, "empty_cache", None)
+        if callable(empty_cache):
+            empty_cache()
+    except BaseException:
+        pass
+
+
+def _force_test_dataloader(config: object) -> None:
+    dataloader = _value(config, "test_dataloader", None)
+    if dataloader is None:
+        raise ValueError("canonical config has no test_dataloader")
+    sampler = _value(dataloader, "sampler", None)
+    if sampler is None:
+        raise ValueError("canonical test_dataloader has no sampler")
+
+    _set_value(dataloader, "batch_size", 1)
+    _set_value(dataloader, "num_workers", 0)
+    _set_value(dataloader, "persistent_workers", False)
+    _set_value(dataloader, "drop_last", False)
+    _set_value(sampler, "shuffle", False)
+
+
+def _validate_cuda(torch: object) -> object:
+    cuda = getattr(torch, "cuda")
+    if not bool(cuda.is_available()):
+        raise RuntimeError("CUDA is unavailable for synchronized benchmarking")
+    count = int(cuda.device_count())
+    if count != 1:
+        raise RuntimeError(
+            "synchronized benchmarking requires exactly one CUDA-visible "
+            f"device, observed {count}; select one with --gpu"
+        )
+    cuda.set_device(0)
+    return cuda
+
+
+def _next_batch(iterator: object, *, phase: str, index: int) -> object:
+    try:
+        return next(iterator)  # type: ignore[arg-type]
+    except StopIteration as error:
+        raise RuntimeError(
+            f"test dataloader was exhausted during {phase} sample {index}"
+        ) from error
+
+
+def _model_parameter_dtypes(model: object) -> list[str]:
+    parameters = getattr(model, "parameters", None)
+    if not callable(parameters):
+        return []
+    return sorted({str(parameter.dtype) for parameter in parameters()})
+
+
+def _measurement_payload(
     *,
-    success: bool, error: str | None,
-    prediction: dict[str, Any] | None = None,
-    end_to_end: dict[str, Any] | None = None,
-    peak_allocated: float | None = None,
-    peak_reserved: float | None = None,
-) -> dict[str, Any]:
+    prediction_times: Sequence[float],
+    end_to_end_times: Sequence[float],
+    peak_allocated_bytes: int,
+    peak_reserved_bytes: int,
+) -> dict[str, object]:
+    prediction = latency_statistics(prediction_times)
+    end_to_end = latency_statistics(end_to_end_times)
+    over_threshold = sum(
+        value > _TWENTY_HZ_THRESHOLD_MS for value in end_to_end_times
+    )
+    count = len(end_to_end_times)
+    end_to_end.update(
+        {
+            "frames_over_50ms": over_threshold,
+            "percentage_over_50ms": 100.0 * over_threshold / count,
+            "meets_20hz": end_to_end["p95_ms"] <= _TWENTY_HZ_THRESHOLD_MS,
+        }
+    )
     return {
-        "model": plan.model,
-        "config_path": _display_path(plan.config_path),
-        "checkpoint_path": _display_path(plan.checkpoint_path),
-        "checkpoint_selection_type": plan.checkpoint_selection_type,
-        "success": success,
-        "error": error,
-        "gpu_name": gpu[0],
-        "gpu_index": gpu_index,
-        "pytorch_version": gpu[1],
-        "cuda_version": gpu[2],
-        "warmup_count": warmup,
-        "measured_sample_count": samples,
-        "batch_size": 1,
-        "precision": "fp32",
-        "benchmark_timestamp": datetime.now(timezone.utc).isoformat(),
-        "prediction_scope": PREDICTION_SCOPE,
-        "end_to_end_scope": END_TO_END_SCOPE,
-        "prediction_ms": prediction or {},
-        "end_to_end_ms": end_to_end or {},
-        "peak_memory_allocated_mb": peak_allocated,
-        "peak_memory_reserved_mb": peak_reserved,
-        "checkpoint_size_mb": _checkpoint_size(plan.checkpoint_path),
+        "prediction_ms": prediction,
+        "end_to_end_ms": end_to_end,
+        "peak_memory": {
+            "allocated_bytes": peak_allocated_bytes,
+            "reserved_bytes": peak_reserved_bytes,
+            "allocated_mib": peak_allocated_bytes / 1024**2,
+            "reserved_mib": peak_reserved_bytes / 1024**2,
+        },
     }
 
 
-def benchmark_model(
-    plan: BenchmarkPlan, gpu_index: int,
-    gpu: tuple[str, str, str | None],
-    warmup: int, samples: int,
-) -> dict[str, Any]:
-    import torch
-
-    if not plan.config_path.is_file():
-        raise FileNotFoundError(f"Config does not exist: {plan.config_path}")
-    if plan.checkpoint_path is None:
-        raise FileNotFoundError(
-            f"No usable checkpoint found for {plan.model}."
-        )
-    if not is_usable_checkpoint(plan.checkpoint_path):
-        raise ValueError(
-            f"Checkpoint is not a usable PyTorch archive: "
-            f"{plan.checkpoint_path}"
-        )
-
-    runner = test_loop = model = iterator = batch = None
-    prediction_times: list[float] = []
-    end_to_end_times: list[float] = []
-    available = 0
-    requested = warmup + samples
+def _execute_mmengine(
+    run: Run,
+    checkpoint_path: Path,
+    *,
+    warmup: int,
+    samples: int,
+) -> dict[str, object]:
+    runner: object | None = None
+    test_loop: object | None = None
+    iterator: object | None = None
+    model: object | None = None
+    batch: object | None = None
+    prediction: object | None = None
     try:
-        prefix = f"centerpoint-benchmark-{plan.model}-"
-        with tempfile.TemporaryDirectory(prefix=prefix) as work_dir:
-            runner, test_loop = load_runner(plan, work_dir)
-            model = runner.model.eval()
-            iterator = iter(test_loop.dataloader)
+        compatibility = importlib.import_module(
+            "lidar_model_selection.compat.kitti_evaluator"
+        )
+        compatibility.install()
 
+        torch = importlib.import_module("torch")
+        cuda = _validate_cuda(torch)
+
+        mmdet3d_utils = importlib.import_module("mmdet3d.utils")
+        mmdet3d_utils.register_all_modules(init_default_scope=True)
+
+        config_class = importlib.import_module("mmengine.config").Config
+        config = config_class.fromfile(os.fspath(run.paths.config))
+        _force_test_dataloader(config)
+
+        custom_imports = _value(config, "custom_imports", None)
+        if custom_imports:
             try:
-                with torch.inference_mode():
-                    for _ in range(warmup):
-                        batch = next(iterator)
-                        available += 1
-                        model.test_step(batch)
-                        batch = None
+                options = dict(custom_imports)
+            except (TypeError, ValueError) as error:
+                raise TypeError("config custom_imports must be a mapping") from error
+            importer = importlib.import_module(
+                "mmengine.utils"
+            ).import_modules_from_strings
+            importer(**options)
 
-                    torch.cuda.synchronize()
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    torch.cuda.reset_peak_memory_stats()
+        prediction_times: list[float] = []
+        end_to_end_times: list[float] = []
+        with tempfile.TemporaryDirectory(
+            prefix=f"lidar-benchmark-{run.run_id}-"
+        ) as work_directory:
+            _set_value(config, "load_from", os.fspath(checkpoint_path))
+            _set_value(config, "resume", False)
+            _set_value(config, "launcher", "none")
+            _set_value(config, "work_dir", work_directory)
 
-                    for _ in range(samples):
-                        torch.cuda.synchronize()
-                        end_to_end_start = time.perf_counter()
-                        batch = next(iterator)
-                        available += 1
-
-                        torch.cuda.synchronize()
-                        prediction_start = time.perf_counter()
-                        model.test_step(batch)
-                        torch.cuda.synchronize()
-                        prediction_end = time.perf_counter()
-
-                        prediction_times.append(
-                            (prediction_end - prediction_start) * 1000.0
-                        )
-                        end_to_end_times.append(
-                            (prediction_end - end_to_end_start) * 1000.0
-                        )
-                        batch = None
-            except StopIteration as exc:
-                raise RuntimeError(
-                    f"Requested {requested} batches, but the validation "
-                    f"dataloader provided only {available}."
-                ) from exc
-
-            prediction = latency_statistics(prediction_times)
-            end_to_end = latency_statistics(end_to_end_times)
-            frames = np.asarray(end_to_end_times)
-            frames_over_50ms = int(np.count_nonzero(frames > 50.0))
-            end_to_end["frames_over_50ms"] = frames_over_50ms
-            end_to_end["percentage_over_50ms"] = (
-                frames_over_50ms / samples * 100.0
+            _require_execution_inputs_unchanged(run, checkpoint_path)
+            runner_class = importlib.import_module("mmengine.runner").Runner
+            runner = runner_class.from_cfg(config)
+            runner.load_or_resume()  # type: ignore[attr-defined]
+            test_loop = runner.build_test_loop(  # type: ignore[attr-defined]
+                _value(config, "test_cfg")
             )
-            end_to_end["meets_20hz"] = end_to_end["p95_ms"] <= 50.0
-            return _result(
-                plan,
-                gpu_index,
-                gpu,
-                warmup,
-                samples,
-                success=True,
-                error=None,
-                prediction=prediction,
-                end_to_end=end_to_end,
-                peak_allocated=torch.cuda.max_memory_allocated() / 1024**2,
-                peak_reserved=torch.cuda.max_memory_reserved() / 1024**2,
+            model = runner.model  # type: ignore[attr-defined]
+            model.eval()  # type: ignore[attr-defined]
+            parameter_dtypes = _model_parameter_dtypes(model)
+            iterator = iter(test_loop.dataloader)  # type: ignore[attr-defined]
+
+            with torch.inference_mode():
+                for index in range(1, warmup + 1):
+                    batch = _next_batch(iterator, phase="warm-up", index=index)
+                    prediction = model.test_step(batch)  # type: ignore[attr-defined]
+                    prediction = None
+                    batch = None
+
+                cuda.synchronize()
+                gc.collect()
+                cuda.empty_cache()
+                cuda.reset_peak_memory_stats()
+
+                for index in range(1, samples + 1):
+                    cuda.synchronize()
+                    end_to_end_started = time.perf_counter_ns()
+                    batch = _next_batch(iterator, phase="measured", index=index)
+                    cuda.synchronize()
+                    prediction_started = time.perf_counter_ns()
+                    prediction = model.test_step(batch)  # type: ignore[attr-defined]
+                    cuda.synchronize()
+                    finished = time.perf_counter_ns()
+
+                    prediction_times.append(
+                        _finite_nonnegative(
+                            (finished - prediction_started) / 1_000_000.0,
+                            description="prediction latency",
+                        )
+                    )
+                    end_to_end_times.append(
+                        _finite_nonnegative(
+                            (finished - end_to_end_started) / 1_000_000.0,
+                            description="end-to-end latency",
+                        )
+                    )
+                    prediction = None
+                    batch = None
+
+            peak_allocated = int(cuda.max_memory_allocated())
+            peak_reserved = int(cuda.max_memory_reserved())
+            if peak_allocated < 0 or peak_reserved < 0:
+                raise ValueError("CUDA peak memory counters must be non-negative")
+
+            measured = _measurement_payload(
+                prediction_times=prediction_times,
+                end_to_end_times=end_to_end_times,
+                peak_allocated_bytes=peak_allocated,
+                peak_reserved_bytes=peak_reserved,
             )
+            measured["hardware"] = {
+                "device_type": "cuda",
+                "logical_device_index": 0,
+                "visible_device_count": 1,
+                "device_name": str(cuda.get_device_name(0)),
+                "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            }
+            measured["precision"] = {
+                "execution_policy": "torch_inference_mode_no_autocast",
+                "inference_mode": True,
+                "autocast_enabled_by_benchmark": False,
+                "model_parameter_dtypes": parameter_dtypes,
+            }
+            return measured
     finally:
-        batch = iterator = model = test_loop = runner = None
+        prediction = None
+        batch = None
+        iterator = None
+        model = None
+        test_loop = None
+        runner = None
+        _cleanup_cuda()
 
 
-def failure_result(
-    plan: BenchmarkPlan, error: Exception, gpu_index: int,
-    gpu: tuple[str, str, str | None],
-    warmup: int, samples: int,
-) -> dict[str, Any]:
-    return _result(
-        plan,
-        gpu_index,
-        gpu,
-        warmup,
-        samples,
-        success=False,
-        error=f"{type(error).__name__}: {error}",
-    )
-
-
-def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(value, indent=2, allow_nan=False) + "\n"
-    path.write_text(text, encoding="utf-8")
-
-
-def save_model_result(result: dict[str, Any], output_dir: Path) -> Path:
-    path = output_dir / result["model"] / "latency.json"
-    _write_json(path, result)
-    return path
-
-
-def _summary_row(result: dict[str, Any]) -> dict[str, Any]:
-    prediction = result["prediction_ms"]
-    end_to_end = result["end_to_end_ms"]
+def _methodology() -> dict[str, object]:
     return {
-        "model": result["model"],
-        "checkpoint": result["checkpoint_path"],
-        "checkpoint_selection_type": result["checkpoint_selection_type"],
-        "success": result["success"],
-        "error": result["error"],
-        "samples": result["measured_sample_count"],
-        "prediction_p50_ms": prediction.get("p50_ms"),
-        "prediction_p95_ms": prediction.get("p95_ms"),
-        "prediction_p99_ms": prediction.get("p99_ms"),
-        "end_to_end_mean_ms": end_to_end.get("mean_ms"),
-        "end_to_end_p50_ms": end_to_end.get("p50_ms"),
-        "end_to_end_p95_ms": end_to_end.get("p95_ms"),
-        "end_to_end_p99_ms": end_to_end.get("p99_ms"),
-        "percentage_over_50ms": end_to_end.get("percentage_over_50ms"),
-        "meets_20hz": end_to_end.get("meets_20hz"),
-        "peak_memory_allocated_mb": result["peak_memory_allocated_mb"],
-        "peak_memory_reserved_mb": result["peak_memory_reserved_mb"],
-        "checkpoint_size_mb": result["checkpoint_size_mb"],
-        "gpu_name": result["gpu_name"],
+        "id": METHODOLOGY_ID,
+        "version": METHODOLOGY_VERSION,
+        "key": METHODOLOGY_KEY,
+        "timing_scopes": {
+            "prediction_ms": "model.test_step(batch)",
+            "end_to_end_ms": "next(iterator) + model.test_step(batch)",
+        },
+        "synchronization": {
+            "device": "CUDA",
+            "end_to_end": (
+                "synchronize before start, after next(iterator), and after "
+                "model.test_step before stop"
+            ),
+            "prediction": (
+                "start after the post-next synchronization and stop after "
+                "the post-test_step synchronization"
+            ),
+        },
+        "iterator_policy": (
+            "one iterator shared by warm-up and measured samples; no reset "
+            "or cycling"
+        ),
+        "dataloader_policy": (
+            "test dataloader forced to batch_size=1, num_workers=0, "
+            "persistent_workers=false, drop_last=false, and sampler "
+            "shuffle=false"
+        ),
+        "warmup_policy": (
+            "execute the requested leading samples, synchronize, collect "
+            "garbage, empty the CUDA cache, then reset peak memory counters"
+        ),
+        "sample_policy": (
+            "measure exactly the requested consecutive samples following "
+            "warm-up; fail if the iterator is exhausted"
+        ),
+        "statistics": {
+            "unit": "milliseconds",
+            "percentiles": "linear interpolation at (n - 1) * q",
+            "standard_deviation": "population standard deviation (ddof=0)",
+            "twenty_hz": (
+                "end-to-end p95 <= 50 ms; frames strictly over 50 ms are "
+                "counted"
+            ),
+        },
     }
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[int, float, str]:
-    if row["success"] and row["meets_20hz"]:
-        group = 0
-    elif row["success"]:
-        group = 1
-    else:
-        group = 2
-    p95 = row["end_to_end_p95_ms"]
-    return group, float(p95) if p95 is not None else float("inf"), row["model"]
-
-
-def save_summary(
-    results: Sequence[dict[str, Any]], output_dir: Path
-) -> list[dict[str, Any]]:
-    rows = sorted((_summary_row(result) for result in results), key=_sort_key)
-    _write_json(output_dir / "summary.json", rows)
-    csv_path = output_dir / "summary.csv"
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(
-            stream,
-            fieldnames=SUMMARY_FIELDS,
-            extrasaction="raise",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-    return rows
-
-
-def print_ranking(rows: Sequence[dict[str, Any]]) -> None:
-    print("\nBenchmark ranking:")
-    print(
-        f"{'model':<20} {'prediction p95':>15} {'e2e p95':>12} "
-        f"{'20 Hz':>8} {'status':>10}"
-    )
-    for row in rows:
-        prediction = row["prediction_p95_ms"]
-        end_to_end = row["end_to_end_p95_ms"]
-        prediction_text = (
-            f"{prediction:.3f}" if prediction is not None else "-"
-        )
-        end_to_end_text = (
-            f"{end_to_end:.3f}" if end_to_end is not None else "-"
-        )
-        meets = row["meets_20hz"]
-        meets_text = (
-            "yes" if meets is True else ("no" if meets is False else "-")
-        )
-        status = "PASS" if row["success"] else "FAIL"
-        print(
-            f"{row['model']:<20} {prediction_text:>15} "
-            f"{end_to_end_text:>12} {meets_text:>8} {status:>10}"
-        )
-    hardware = rows[0]["gpu_name"] if rows else "workstation"
-    print(
-        f"\nThis benchmark measures the {hardware} workstation GPU and does "
-        "not prove performance on the final deployment hardware."
-    )
-
-
-def cleanup_cuda() -> None:
-    gc.collect()
-    import torch
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def _print_dry_run(
-    plans: Sequence[BenchmarkPlan], gpu_index: int, gpu_name: str,
-    warmup: int, samples: int,
-) -> int:
-    print(f"Detected GPU {gpu_index}: {gpu_name} (visible as cuda:0)")
-    print(f"Warm-up frames: {warmup}")
-    print(f"Measured frames: {samples}")
-    print("Model order:")
-    failed = False
-    for index, plan in enumerate(plans, start=1):
-        print(f"  {index}. {plan.model}")
-        print(f"     config: {_display_path(plan.config_path)}")
-        checkpoint = _display_path(plan.checkpoint_path) or "(none)"
-        print(f"     checkpoint: {checkpoint}")
-        print(
-            "     checkpoint selection: "
-            f"{plan.checkpoint_selection_type or '(none)'}"
-        )
-        if plan.checkpoint_path is None:
-            print("     ERROR: No usable checkpoint found.")
-            failed = True
-        else:
-            print("     action: benchmark")
-    return 1 if failed else 0
-
-
-def run_benchmark(
+def _payload(
+    run: Run,
     *,
-    config_path: Path | None, checkpoint_path: Path | None,
-    all_models: bool, gpu_index: int, warmup: int, samples: int,
-    output_dir: Path, dry_run: bool,
-) -> int:
+    warmup: int,
+    samples: int,
+    checkpoint: CheckpointArtifact,
+    execution: Mapping[str, object] | None,
+) -> dict[str, object]:
+    evidence = {} if execution is None else dict(execution)
+    return {
+        "kind": "benchmark",
+        "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
+        "methodology": _methodology(),
+        "workload": {
+            "semantic_partition": run.manifest.dataset.semantic_partition,
+            "framework_key": run.manifest.dataset.framework_key,
+            "batch_size": 1,
+            "num_workers": 0,
+            "persistent_workers": False,
+            "drop_last": False,
+            "shuffle": False,
+            "warmup_count": warmup,
+            "measured_sample_count": samples,
+        },
+        "checkpoint": {
+            "size_bytes": checkpoint.size_bytes,
+            "size_mib": checkpoint.size_bytes / 1024**2,
+        },
+        "hardware": evidence.get("hardware"),
+        "precision": evidence.get("precision"),
+        "prediction_ms": evidence.get("prediction_ms", {}),
+        "end_to_end_ms": evidence.get("end_to_end_ms", {}),
+        "peak_memory": evidence.get("peak_memory"),
+    }
+
+
+def benchmark_run(
+    run: Run | Path | str,
+    *,
+    warmup: int,
+    samples: int,
+) -> ResultRecord:
+    """Benchmark one explicit completed run and publish one fresh result."""
+    warmup = _require_positive_integer(warmup, description="warmup")
+    samples = _require_positive_integer(samples, description="samples")
+    started_at = _timestamp()
+    loaded = _load_canonical_run(run)
+    binding = binding_for_run(loaded)
+    selected_checkpoint = loaded.selected_checkpoint
+    assert selected_checkpoint is not None
+
+    provenance: CodeProvenance | None = None
+    environment: EnvironmentInfo | None = None
+    execution: Mapping[str, object] | None = None
     try:
-        gpu = _validate_cuda(gpu_index)
-    except Exception as exc:
-        print(f"ERROR: {type(exc).__name__}: {exc}")
-        return 1
+        provenance, environment = _capture_initial_evidence()
+        checkpoint_path = _checkpoint_path(loaded, selected_checkpoint)
+        execution = _execute_mmengine(
+            loaded,
+            checkpoint_path,
+            warmup=warmup,
+            samples=samples,
+        )
+        environment = _capture_execution_environment()
+    except BaseException as error:
+        failed = create_result(
+            result_type="benchmark",
+            binding=binding,
+            status="failed",
+            started_at=started_at,
+            finished_at=_timestamp(),
+            payload=_payload(
+                loaded,
+                warmup=warmup,
+                samples=samples,
+                checkpoint=selected_checkpoint,
+                execution=execution,
+            ),
+            provenance=provenance,
+            environment=environment,
+            failure=ResultFailure(
+                error_type=type(error).__name__,
+                message=str(error),
+                traceback=traceback.format_exc(),
+            ),
+        )
+        publish_result(loaded, failed)
+        if not isinstance(error, Exception):
+            raise
+        return failed
 
-    plans = build_plans(config_path, checkpoint_path, all_models)
-    if dry_run:
-        return _print_dry_run(plans, gpu_index, gpu[0], warmup, samples)
-
-    output_dir = resolve_output_dir(output_dir)
-    results = []
-    for plan in plans:
-        print(f"GPU {gpu_index}: {plan.model} started")
-        try:
-            result = benchmark_model(plan, gpu_index, gpu, warmup, samples)
-        except Exception as exc:
-            result = failure_result(plan, exc, gpu_index, gpu, warmup, samples)
-        cleanup_cuda()
-        path = save_model_result(result, output_dir)
-        results.append(result)
-        if result["success"]:
-            print(f"GPU {gpu_index}: {plan.model} finished successfully")
-        else:
-            print(f"GPU {gpu_index}: {plan.model} failed: {result['error']}")
-        print(f"Latency JSON: {_display_path(path)}")
-
-    rows = save_summary(results, output_dir)
-    print(f"Summary JSON: {_display_path(output_dir / 'summary.json')}")
-    print(f"Summary CSV: {_display_path(output_dir / 'summary.csv')}")
-    print_ranking(rows)
-    return 1 if any(not result["success"] for result in results) else 0
+    succeeded = create_result(
+        result_type="benchmark",
+        binding=binding,
+        status="succeeded",
+        started_at=started_at,
+        finished_at=_timestamp(),
+        payload=_payload(
+            loaded,
+            warmup=warmup,
+            samples=samples,
+            checkpoint=selected_checkpoint,
+            execution=execution,
+        ),
+        provenance=provenance,
+        environment=environment,
+        failure=None,
+    )
+    publish_result(loaded, succeeded)
+    return succeeded

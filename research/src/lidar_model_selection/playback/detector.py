@@ -1,70 +1,174 @@
+"""Run-owned MMDetection3D inference for recorded LiDAR frames."""
+
+from __future__ import annotations
+
+import importlib
+import os
 from math import isfinite
-from numbers import Real
+from numbers import Integral, Real
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
-import torch
-from mmdet3d.apis import inference_detector, init_model
-
+from ..checkpoints import CheckpointArtifact, verify_checkpoint
+from ..results import ResultBinding, binding_for_run
+from ..runs import Run, load_run
 from .frame_source import LidarFrame
 from .results import Detection, FrameResult
+
+
+def _load_canonical_run(run: Run | Path | str) -> Run:
+    if isinstance(run, Run):
+        return load_run(run.paths.root)
+    if not isinstance(run, (Path, str)):
+        raise TypeError("run must be a loaded Run or an explicit run directory")
+    return load_run(run)
+
+
+def _selected_checkpoint_path(
+    run: Run,
+    artifact: CheckpointArtifact,
+) -> Path:
+    reference = Path(artifact.path)
+    if run.manifest.origin == "native":
+        if reference.is_absolute():
+            raise ValueError("native selected checkpoint must be run-relative")
+        root: Path | None = run.paths.root
+    else:
+        if not reference.is_absolute():
+            raise ValueError(
+                "historically imported selected checkpoint must be absolute"
+            )
+        root = None
+
+    mismatches = verify_checkpoint(artifact, root=root)
+    if mismatches:
+        details = "; ".join(
+            f"{mismatch.field}: expected {mismatch.expected!r}, "
+            f"observed {mismatch.actual!r}"
+            for mismatch in mismatches
+        )
+        raise ValueError(f"selected checkpoint identity mismatch: {details}")
+
+    path = reference if reference.is_absolute() else run.paths.root / reference
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _require_execution_inputs_unchanged(
+    run: Run,
+    binding: ResultBinding,
+    checkpoint_path: Path,
+) -> None:
+    """Reverify the canonical evidence immediately before model creation."""
+    current = load_run(run.paths.root)
+    if current.manifest != run.manifest:
+        raise ValueError("run manifest changed before detector initialization")
+    if binding_for_run(current) != binding:
+        raise ValueError("run binding changed before detector initialization")
+    selected = current.selected_checkpoint
+    if selected is None:
+        raise ValueError("run no longer has a selected checkpoint")
+    if _selected_checkpoint_path(current, selected) != checkpoint_path:
+        raise ValueError(
+            "selected checkpoint path changed before detector initialization"
+        )
+
+
+def _prediction_values(
+    boxes: Any,
+    scores: Any,
+    labels: Any,
+) -> tuple[list[list[Real]], list[Real], list[Integral]]:
+    box_values = boxes.detach().cpu().tolist()
+    score_values = scores.detach().cpu().tolist()
+    label_values = labels.detach().cpu().tolist()
+
+    for row in box_values:
+        if not isinstance(row, list) or len(row) != 7:
+            raise ValueError("prediction boxes must contain seven-value rows")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not isfinite(value)
+            for value in row
+        ):
+            raise ValueError("prediction boxes must contain finite real values")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not isfinite(value)
+        for value in score_values
+    ):
+        raise ValueError("prediction scores must contain finite real values")
+    if any(
+        isinstance(value, bool) or not isinstance(value, Integral)
+        for value in label_values
+    ):
+        raise ValueError("prediction labels must contain integer values")
+    return box_values, score_values, label_values
 
 
 class Mmdet3dDetector:
     def __init__(
         self,
-        config_path: Path,
-        checkpoint_path: Path,
+        run: Run | Path | str,
         device: str = "cuda:0",
         score_threshold: float = 0.0,
     ) -> None:
-        if not isinstance(config_path, Path):
-            raise TypeError("config_path must be a pathlib.Path")
-        if not config_path.exists():
-            raise FileNotFoundError(f"config_path does not exist: {config_path}")
-        if not config_path.is_file():
-            raise ValueError(f"config_path must be a file: {config_path}")
-
-        if not isinstance(checkpoint_path, Path):
-            raise TypeError("checkpoint_path must be a pathlib.Path")
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"checkpoint_path does not exist: {checkpoint_path}")
-        if not checkpoint_path.is_file():
-            raise ValueError(f"checkpoint_path must be a file: {checkpoint_path}")
-
         if not isinstance(device, str):
             raise TypeError("device must be a string")
         if not device.strip():
             raise ValueError("device must contain at least one non-whitespace character")
 
-        if isinstance(score_threshold, bool) or not isinstance(score_threshold, Real):
+        if isinstance(score_threshold, bool) or not isinstance(
+            score_threshold,
+            Real,
+        ):
             raise TypeError("score_threshold must be a real number and not a boolean")
         if not isfinite(score_threshold):
             raise ValueError("score_threshold must be finite")
 
-        self._score_threshold = score_threshold
-        self._model = init_model(
-            config=str(config_path),
-            checkpoint=str(checkpoint_path),
+        loaded = _load_canonical_run(run)
+        binding = binding_for_run(loaded)
+        selected = loaded.selected_checkpoint
+        assert selected is not None
+        checkpoint_path = _selected_checkpoint_path(loaded, selected)
+
+        torch = importlib.import_module("torch")
+        mmdet3d_apis = importlib.import_module("mmdet3d.apis")
+
+        _require_execution_inputs_unchanged(
+            loaded,
+            binding,
+            checkpoint_path,
+        )
+        model = mmdet3d_apis.init_model(
+            config=os.fspath(loaded.paths.config),
+            checkpoint=os.fspath(checkpoint_path),
             device=device,
         )
-        self._model_device = next(self._model.parameters()).device
+
+        self._score_threshold = score_threshold
+        self._torch = torch
+        self._inference_detector = mmdet3d_apis.inference_detector
+        self._model = model
+        self._model_device = next(model.parameters()).device
 
     def detect(self, frame: LidarFrame) -> FrameResult:
         if not isinstance(frame, LidarFrame):
             raise TypeError("frame must be a LidarFrame")
 
         if self._model_device.type == "cuda":
-            torch.cuda.synchronize(self._model_device)
+            self._torch.cuda.synchronize(self._model_device)
         start_time = perf_counter()
 
-        result, _ = inference_detector(
+        result, _ = self._inference_detector(
             self._model,
-            str(frame.path),
+            os.fspath(frame.path),
         )
 
         if self._model_device.type == "cuda":
-            torch.cuda.synchronize(self._model_device)
+            self._torch.cuda.synchronize(self._model_device)
         end_time = perf_counter()
 
         predictions = result.pred_instances_3d
@@ -81,30 +185,23 @@ class Mmdet3dDetector:
         if boxes.shape[0] != scores.shape[0] or boxes.shape[0] != labels.shape[0]:
             raise ValueError("prediction box, score, and label counts must match")
 
-        keep = scores >= self._score_threshold
-        retained_boxes = boxes[keep].detach().cpu().tolist()
-        retained_scores = scores[keep].detach().cpu().tolist()
-        retained_labels = labels[keep].detach().cpu().tolist()
-
+        box_values, score_values, label_values = _prediction_values(
+            boxes,
+            scores,
+            labels,
+        )
         detections = tuple(
             Detection(
-                box=(
-                    float(box[0]),
-                    float(box[1]),
-                    float(box[2]),
-                    float(box[3]),
-                    float(box[4]),
-                    float(box[5]),
-                    float(box[6]),
-                ),
+                box=tuple(float(value) for value in box),
                 score=float(score),
                 label=int(label),
             )
             for box, score, label in zip(
-                retained_boxes,
-                retained_scores,
-                retained_labels,
+                box_values,
+                score_values,
+                label_values,
             )
+            if score >= self._score_threshold
         )
 
         return FrameResult(

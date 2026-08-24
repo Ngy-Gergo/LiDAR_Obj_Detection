@@ -41,6 +41,9 @@
 # Training experiments and checkpoints
 /research/experiments/
 
+# Canonical local runs (manifests, immutable results, checkpoints, and logs)
+/research/runs/
+
 # Keep only aggregate evaluation summaries
 /research/evaluations/*
 !/research/evaluations/summary.csv

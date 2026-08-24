@@ -1,4 +1,4 @@
-"""Smoke-test one explicit completed canonical run."""
+"""Evaluate one explicit completed canonical run."""
 
 from __future__ import annotations
 
@@ -10,19 +10,21 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-RESEARCH_SOURCE = REPOSITORY_ROOT / "research" / "src"
+RESEARCH_ROOT = REPOSITORY_ROOT / "research"
+RESEARCH_SOURCE = RESEARCH_ROOT / "src"
 
 if str(RESEARCH_SOURCE) not in sys.path:
     sys.path.insert(0, str(RESEARCH_SOURCE))
 
 from lidar_model_selection.evaluation import (  # noqa: E402
     DEFAULT_RUNS_ROOT,
-    smoke_run,
+    evaluate_run,
 )
 from lidar_model_selection.runs import validate_run_id  # noqa: E402
 
 
 def run_id_argument(value: str) -> str:
+    """Parse one canonical run ID for argparse."""
     try:
         return validate_run_id(value)
     except (TypeError, ValueError) as error:
@@ -30,6 +32,7 @@ def run_id_argument(value: str) -> str:
 
 
 def gpu_visibility_argument(value: str) -> str:
+    """Parse one non-empty CUDA visibility token without importing Torch."""
     if not value or value.strip() != value or "\0" in value:
         raise argparse.ArgumentTypeError(
             "GPU visibility must be non-empty canonical text"
@@ -39,9 +42,7 @@ def gpu_visibility_argument(value: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Smoke-test one completed run's selected checkpoint on one GPU."
-        ),
+        description="Evaluate one explicit completed canonical run."
     )
     parser.add_argument(
         "--run",
@@ -49,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=run_id_argument,
         metavar="RUN_ID",
-        help="Canonical completed run ID to smoke-test.",
+        help="Canonical completed run ID to evaluate.",
     )
     parser.add_argument(
         "--gpu",
@@ -64,25 +65,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     if arguments.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = arguments.gpu
+
     try:
-        summary = smoke_run(DEFAULT_RUNS_ROOT / arguments.run_id)
+        record = evaluate_run(DEFAULT_RUNS_ROOT / arguments.run_id)
     except Exception as error:
         print(
-            f"ERROR: smoke test failed: {type(error).__name__}: {error}",
+            f"ERROR: evaluation could not be recorded: "
+            f"{type(error).__name__}: {error}",
             file=sys.stderr,
         )
         return 1
 
-    print(f"run: {summary['run_id']}")
-    print(f"selected checkpoint SHA-256: {summary['checkpoint_sha256']}")
-    print(f"loss keys: {summary['loss_keys']}")
-    print(f"total loss: {summary['total_loss']:.6f}")
-    print(f"finite gradient tensors: {summary['finite_gradient_tensors']}")
-    print(f"prediction boxes: {summary['prediction_boxes_shape']}")
-    print(f"prediction scores: {summary['prediction_scores_shape']}")
-    print(f"prediction labels: {summary['prediction_labels_shape']}")
-    print("CenterPoint smoke test: PASS")
-    return 0
+    print(
+        f"RESULT: run={record.binding.run_id} "
+        f"result={record.result_id} status={record.status}"
+    )
+    if record.failure is not None:
+        print(
+            f"ERROR: {record.failure.error_type}: {record.failure.message}",
+            file=sys.stderr,
+        )
+    return 0 if record.successful else 1
 
 
 if __name__ == "__main__":

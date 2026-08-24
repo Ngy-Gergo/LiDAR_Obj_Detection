@@ -1,5 +1,10 @@
 # LiDAR model selection
 
+> **Architecture recovery checkpoint:** most command examples below describe
+> the retired `screenN`/checkpoint-discovery workflow. Do not use them for new
+> work. See [PROGRESS.md](PROGRESS.md) for the validated run-owned interfaces,
+> intentional temporary breakages, and the next continuation task.
+
 This installable Python package owns research-only concerns: MMDetection3D
 compatibility, experiment configurations, evaluation, benchmarking, and
 recorded-data playback.

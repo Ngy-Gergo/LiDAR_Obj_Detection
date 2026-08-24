@@ -9,19 +9,14 @@ remain responsible for every other part of evaluation.
 from __future__ import annotations
 
 import argparse
-import copy
 import importlib.machinery
-import importlib.util
-import json
 import math
 import operator
-import runpy
 import sys
 import types
 import warnings
 from collections.abc import Sequence
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -40,20 +35,6 @@ _RANDOM_IOU_ATOL = 5e-6
 _RANDOM_IOU_RTOL = 1e-5
 _RANDOM_INTERSECTION_ATOL = 5e-5
 _RANDOM_INTERSECTION_RTOL = 1e-5
-
-_KITTI_PREDICTION_FIELDS = (
-    "name",
-    "truncated",
-    "occluded",
-    "alpha",
-    "bbox",
-    "dimensions",
-    "location",
-    "rotation_y",
-    "score",
-    "sample_idx",
-)
-
 
 def _normalize_boxes(value: Any, name: str) -> np.ndarray:
     """Validate an ``(N, 5)`` input and return contiguous float32."""
@@ -573,357 +554,6 @@ def _run_self_test(device_mode: str) -> int:
     return 0
 
 
-def _find_official_test_script() -> Path:
-    spec = importlib.util.find_spec("mmdet3d")
-    if spec is None or spec.submodule_search_locations is None:
-        raise RuntimeError(
-            "Cannot locate the installed MMDetection3D package."
-        )
-
-    candidates = [
-        Path(location) / ".mim" / "tools" / "test.py"
-        for location in spec.submodule_search_locations
-    ]
-    scripts = [candidate for candidate in candidates if candidate.is_file()]
-    if len(scripts) != 1:
-        rendered = ", ".join(str(candidate) for candidate in candidates)
-        raise RuntimeError(
-            "Expected exactly one installed MMDetection3D test script; "
-            f"searched: {rendered}"
-        )
-    return scripts[0]
-
-
-def _run_official_test(arguments: Sequence[str]) -> int:
-    if not arguments:
-        raise ValueError(
-            "The test command requires the arguments accepted by the "
-            "official MMDetection3D test script."
-        )
-
-    install()
-    test_script = _find_official_test_script()
-    previous_argv = sys.argv
-    sys.argv = [str(test_script), *arguments]
-    try:
-        runpy.run_path(str(test_script), run_name="__main__")
-    finally:
-        sys.argv = previous_argv
-    return 0
-
-
-def _select_kitti_evaluator_config(config: Any) -> dict[str, Any]:
-    configured = config.get("test_evaluator")
-    if configured is None:
-        raise ValueError("The config does not define test_evaluator.")
-
-    candidates = (
-        list(configured)
-        if isinstance(configured, (list, tuple))
-        else [configured]
-    )
-    matches: list[dict[str, Any]] = []
-    for candidate in candidates:
-        candidate_dict = copy.deepcopy(dict(candidate))
-        metric_type = candidate_dict.get("type")
-        if isinstance(metric_type, str):
-            type_name = metric_type.rsplit(".", 1)[-1]
-        else:
-            type_name = getattr(metric_type, "__name__", "")
-        if type_name == "KittiMetric":
-            matches.append(candidate_dict)
-
-    if len(matches) != 1:
-        raise ValueError(
-            "The config must define exactly one KittiMetric in "
-            "test_evaluator."
-        )
-    if matches[0].get("format_only", False):
-        raise ValueError(
-            "eval-pkl cannot evaluate a KittiMetric configured with "
-            "format_only=True."
-        )
-    return matches[0]
-
-
-def _test_dataset_config(config: Any) -> dict[str, Any]:
-    test_dataloader = config.get("test_dataloader")
-    if test_dataloader is None or "dataset" not in test_dataloader:
-        raise ValueError(
-            "The config does not define test_dataloader.dataset."
-        )
-
-    dataset = dict(test_dataloader["dataset"])
-    while "metainfo" not in dataset and "dataset" in dataset:
-        dataset = dict(dataset["dataset"])
-    return dataset
-
-
-def _dataset_metainfo(config: Any) -> dict[str, Any]:
-    dataset = _test_dataset_config(config)
-    metainfo = dataset.get("metainfo")
-    if metainfo is None:
-        metainfo = config.get("metainfo")
-    if metainfo is None:
-        raise ValueError(
-            "The config does not define test dataset metainfo."
-        )
-
-    result = copy.deepcopy(dict(metainfo))
-    classes = result.get("classes")
-    if (
-        not isinstance(classes, (list, tuple))
-        or not classes
-        or not all(isinstance(name, str) for name in classes)
-    ):
-        raise ValueError(
-            "The test dataset metainfo must define a non-empty classes list."
-        )
-    result["classes"] = tuple(classes)
-    return result
-
-
-def _require_sequential_test_sampler(config: Any) -> None:
-    test_dataloader = config.get("test_dataloader")
-    sampler = (
-        test_dataloader.get("sampler")
-        if test_dataloader is not None
-        else None
-    )
-    if sampler is None or sampler.get("shuffle") is not False:
-        raise ValueError(
-            "eval-pkl requires test_dataloader.sampler.shuffle=False so "
-            "empty predictions can be aligned by verified list order."
-        )
-
-
-def _validate_prediction_annotation(
-    prediction: Any,
-    position: int,
-) -> bool:
-    if not isinstance(prediction, dict):
-        raise ValueError(
-            f"Prediction {position} must be a KITTI annotation dictionary."
-        )
-    missing = [
-        field
-        for field in _KITTI_PREDICTION_FIELDS
-        if field not in prediction
-    ]
-    if missing:
-        raise ValueError(
-            f"Prediction {position} is missing fields: {missing}"
-        )
-
-    score = np.asarray(prediction["score"])
-    if score.ndim != 1:
-        raise ValueError(
-            f"Prediction {position} score must have shape (N,); "
-            f"got {score.shape}"
-        )
-    count = score.shape[0]
-
-    vector_fields = (
-        "name",
-        "truncated",
-        "occluded",
-        "alpha",
-        "rotation_y",
-        "score",
-        "sample_idx",
-    )
-    for field in vector_fields:
-        value = np.asarray(prediction[field])
-        if value.ndim != 1 or value.shape[0] != count:
-            raise ValueError(
-                f"Prediction {position} field {field!r} must have shape "
-                f"({count},); got {value.shape}"
-            )
-
-    matrix_shapes = {
-        "bbox": (count, 4),
-        "dimensions": (count, 3),
-        "location": (count, 3),
-    }
-    for field, expected_shape in matrix_shapes.items():
-        value = np.asarray(prediction[field])
-        if value.shape != expected_shape:
-            raise ValueError(
-                f"Prediction {position} field {field!r} must have shape "
-                f"{expected_shape}; got {value.shape}"
-            )
-
-    sample_indices = np.asarray(prediction["sample_idx"])
-    if not np.issubdtype(sample_indices.dtype, np.integer):
-        raise ValueError(
-            f"Prediction {position} sample_idx must use an integer dtype; "
-            f"got {sample_indices.dtype}"
-        )
-    if count == 0:
-        return True
-    if not np.all(sample_indices == sample_indices[0]):
-        raise ValueError(
-            f"Prediction {position} contains inconsistent sample_idx values."
-        )
-    declared_position = int(sample_indices[0])
-    if declared_position != position:
-        raise ValueError(
-            f"Prediction {position} declares sample_idx "
-            f"{declared_position}; expected positional index {position}."
-        )
-    return False
-
-
-def _validate_annotation_information(annotation_data: Any) -> list[dict]:
-    if not isinstance(annotation_data, dict):
-        raise ValueError(
-            "The KITTI annotation file must contain a dictionary."
-        )
-    if not isinstance(annotation_data.get("metainfo"), dict):
-        raise ValueError(
-            "The KITTI annotation file is missing dictionary metainfo."
-        )
-    data_list = annotation_data.get("data_list")
-    if not isinstance(data_list, list):
-        raise ValueError(
-            "The KITTI annotation file is missing a data_list."
-        )
-
-    raw_sample_indices: list[int] = []
-    for position, data_info in enumerate(data_list):
-        if not isinstance(data_info, dict) or "sample_idx" not in data_info:
-            raise ValueError(
-                f"Annotation data_list entry {position} lacks sample_idx."
-            )
-        try:
-            raw_sample_indices.append(operator.index(data_info["sample_idx"]))
-        except TypeError as exc:
-            raise ValueError(
-                f"Annotation data_list entry {position} has a non-integral "
-                "raw sample_idx."
-            ) from exc
-    if len(set(raw_sample_indices)) != len(raw_sample_indices):
-        raise ValueError(
-            "The KITTI annotation file contains duplicate raw sample_idx "
-            "values."
-        )
-    return data_list
-
-
-def _evaluate_prediction_pickle(
-    *,
-    config_path: Path,
-    predictions_path: Path,
-    annotation_path: Path,
-    output_json_path: Path,
-) -> int:
-    install()
-
-    from mmengine import load
-    from mmengine.config import Config
-    from mmdet3d.registry import METRICS
-    from mmdet3d.utils import register_all_modules
-
-    config = Config.fromfile(str(config_path))
-    _require_sequential_test_sampler(config)
-    evaluator_config = _select_kitti_evaluator_config(config)
-    evaluator_config["ann_file"] = str(annotation_path)
-    dataset_metainfo = _dataset_metainfo(config)
-
-    register_all_modules(init_default_scope=False)
-    metric = METRICS.build(evaluator_config)
-    metric.dataset_meta = dataset_metainfo
-    classes = list(dataset_metainfo["classes"])
-
-    predictions = load(str(predictions_path))
-    if not isinstance(predictions, list):
-        raise ValueError(
-            "The prediction pkl must contain the KITTI annotation list "
-            "written by KittiMetric.bbox2result_kitti."
-        )
-
-    annotation_data = load(
-        str(annotation_path),
-        backend_args=metric.backend_args,
-    )
-    raw_data_list = _validate_annotation_information(annotation_data)
-    converted_infos = metric.convert_annos_to_kitti_annos(annotation_data)
-
-    if len(converted_infos) != len(raw_data_list):
-        raise ValueError(
-            "Official KITTI annotation conversion changed the data-list "
-            "length unexpectedly."
-        )
-    if len(predictions) != len(converted_infos):
-        raise ValueError(
-            "Prediction/annotation length mismatch: "
-            f"{len(predictions)} predictions versus "
-            f"{len(converted_infos)} annotations."
-        )
-
-    empty_positions = 0
-    verified_positions = 0
-    for position, prediction in enumerate(predictions):
-        is_empty = _validate_prediction_annotation(prediction, position)
-        if is_empty:
-            empty_positions += 1
-        else:
-            verified_positions += 1
-    if verified_positions == 0:
-        raise ValueError(
-            "Every prediction is empty, so the converted pkl contains no "
-            "sample_idx values with which to verify positional alignment."
-        )
-
-    gt_annos: list[dict] = []
-    for position, data_info in enumerate(converted_infos):
-        if "kitti_annos" not in data_info:
-            raise ValueError(
-                f"Converted annotation {position} lacks kitti_annos."
-            )
-        gt_annos.append(data_info["kitti_annos"])
-
-    result_dict = {"pred_instances_3d": predictions}
-    metrics: dict[str, float] = {}
-    for requested_metric in metric.metrics:
-        evaluated = metric.kitti_evaluate(
-            result_dict,
-            gt_annos,
-            metric=requested_metric,
-            classes=classes,
-            logger=None,
-        )
-        duplicate_keys = set(metrics).intersection(evaluated)
-        if duplicate_keys:
-            raise RuntimeError(
-                f"Duplicate KITTI metric keys: {sorted(duplicate_keys)}"
-            )
-        metrics.update(evaluated)
-
-    if metric.prefix:
-        metrics = {
-            f"{metric.prefix}/{key}": value
-            for key, value in metrics.items()
-        }
-
-    serialized = json.dumps(
-        metrics,
-        sort_keys=True,
-        indent=2,
-        allow_nan=False,
-    ) + "\n"
-    output_json_path.parent.mkdir(parents=True, exist_ok=True)
-    output_json_path.write_text(serialized, encoding="utf-8")
-
-    print(
-        f"Verified positional alignment for {verified_positions} nonempty "
-        f"predictions; used verified list order for {empty_positions} empty "
-        "predictions."
-    )
-    print(f"Wrote {len(metrics)} metrics to {output_json_path}")
-    return 0
-
-
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -944,44 +574,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Backends to test. Defaults to both available backends.",
     )
 
-    test_parser = subparsers.add_parser(
-        "test",
-        add_help=False,
-        help="Delegate to the installed official MMDetection3D test script.",
-    )
-    test_parser.add_argument(
-        "test_arguments",
-        nargs=argparse.REMAINDER,
-    )
-
-    eval_parser = subparsers.add_parser(
-        "eval-pkl",
-        help="Evaluate a persisted converted KITTI prediction pkl.",
-    )
-    eval_parser.add_argument(
-        "--config",
-        required=True,
-        type=Path,
-        help="MMDetection3D configuration used for the predictions.",
-    )
-    eval_parser.add_argument(
-        "--predictions",
-        required=True,
-        type=Path,
-        help="Converted pred_instances_3d.pkl path.",
-    )
-    eval_parser.add_argument(
-        "--ann-file",
-        required=True,
-        type=Path,
-        help="Matching MMDetection3D KITTI information pkl.",
-    )
-    eval_parser.add_argument(
-        "--output-json",
-        required=True,
-        type=Path,
-        help="Destination for deterministic sorted JSON metrics.",
-    )
     return parser
 
 
@@ -989,24 +581,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the compatibility command-line interface."""
     parser = _build_argument_parser()
     arguments = list(sys.argv[1:] if argv is None else argv)
-
-    if arguments and arguments[0] == "test":
-        try:
-            return _run_official_test(arguments[1:])
-        except ValueError as exc:
-            parser.error(str(exc))
-
     args = parser.parse_args(arguments)
 
     if args.command == "self-test":
         return _run_self_test(args.device)
-    if args.command == "eval-pkl":
-        return _evaluate_prediction_pickle(
-            config_path=args.config,
-            predictions_path=args.predictions,
-            annotation_path=args.ann_file,
-            output_json_path=args.output_json,
-        )
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

@@ -2,26 +2,31 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..evaluation import DEFAULT_RUNS_ROOT
+from ..runs import validate_run_id
 from .detector import Mmdet3dDetector
 from .frame_source import DirectoryFrameSource
 from .pipeline import SequentialDetectionPipeline
 
 
+def run_id_argument(value: str) -> str:
+    try:
+        return validate_run_id(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run sequential LiDAR object detection.",
+        description="Run sequential LiDAR object detection for one completed run.",
     )
     parser.add_argument(
-        "--config",
+        "--run",
+        dest="run_id",
         required=True,
-        type=Path,
-        help="Path to the MMDetection3D model configuration.",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        required=True,
-        type=Path,
-        help="Path to the pretrained model checkpoint.",
+        type=run_id_argument,
+        metavar="RUN_ID",
+        help="Canonical completed run ID whose selected checkpoint is used.",
     )
     parser.add_argument(
         "--input-dir",
@@ -74,8 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     detector = Mmdet3dDetector(
-        config_path=args.config,
-        checkpoint_path=args.checkpoint,
+        run=DEFAULT_RUNS_ROOT / args.run_id,
         device=args.device,
         score_threshold=args.score_threshold,
     )
