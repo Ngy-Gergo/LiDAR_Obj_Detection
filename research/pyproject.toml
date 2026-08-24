@@ -14,6 +14,7 @@ dependencies = [
   "mmdet3d==1.4.0",
   "mmengine==0.10.7",
   "numpy==1.26.4",
+  "pandas==2.3.3",
   "torch==2.1.2",
 ]
 

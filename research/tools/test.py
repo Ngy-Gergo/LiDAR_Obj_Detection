@@ -358,6 +358,13 @@ def evaluate_model(plan: EvaluationPlan) -> dict[str, object]:
             cfg.resume = False
             cfg.launcher = "none"
             cfg.work_dir = work_dir
+            if cfg.get("visualizer") is not None:
+                cfg.visualizer.name = (
+                    f"evaluation_visualizer_{plan.model}"
+                )
+                cfg.visualizer.vis_backends = []
+            if cfg.get("default_hooks") is not None:
+                cfg.default_hooks.pop("visualization", None)
 
             runner = Runner.from_cfg(cfg)
             raw_metrics = runner.test()

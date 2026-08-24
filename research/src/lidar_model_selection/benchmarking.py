@@ -7,6 +7,7 @@ import gc
 import json
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,7 @@ class BenchmarkPlan:
     config_path: Path
     checkpoint_path: Path | None
     checkpoint_selection_type: str | None
+    planning_error: str | None = None
 
 
 def resolve_output_dir(path: Path) -> Path:
@@ -78,24 +80,66 @@ def _display_path(path: Path | None) -> str | None:
         return str(resolved)
 
 
+def _plan_error(plan: BenchmarkPlan) -> str | None:
+    if plan.planning_error is not None:
+        return plan.planning_error
+    if not plan.config_path.exists():
+        return f"Config does not exist: {plan.config_path}"
+    if not plan.config_path.is_file():
+        return f"Config is not a regular file: {plan.config_path}"
+    if plan.checkpoint_path is None:
+        return f"No usable checkpoint found for {plan.model}."
+    if not plan.checkpoint_path.exists():
+        return f"Checkpoint does not exist: {plan.checkpoint_path}"
+    if not is_usable_checkpoint(plan.checkpoint_path):
+        return (
+            "Checkpoint is not a usable PyTorch archive: "
+            f"{plan.checkpoint_path}"
+        )
+    return None
+
+
 def build_plans(
     config_path: Path | None, checkpoint_path: Path | None, all_models: bool
 ) -> list[BenchmarkPlan]:
     if not all_models:
         if config_path is None or checkpoint_path is None:
             raise ValueError("CONFIG and CHECKPOINT are required.")
+        resolved_config = config_path.resolve()
+        resolved_checkpoint = checkpoint_path.resolve()
+        plan = BenchmarkPlan(
+            resolved_config.stem,
+            resolved_config,
+            resolved_checkpoint,
+            "explicit",
+        )
+        error = _plan_error(plan)
         return [
             BenchmarkPlan(
-                config_path.stem,
-                config_path.resolve(),
-                checkpoint_path.resolve(),
-                "explicit",
+                plan.model,
+                plan.config_path,
+                plan.checkpoint_path,
+                plan.checkpoint_selection_type,
+                error,
             )
         ]
 
     plans = []
     for model in CENTERPOINT_MODELS:
-        choice = discover_checkpoint(model)
+        try:
+            choice = discover_checkpoint(model)
+        except OSError as error:
+            plans.append(
+                BenchmarkPlan(
+                    model.name,
+                    model.config_path.resolve(),
+                    None,
+                    None,
+                    "checkpoint discovery failed: "
+                    f"{type(error).__name__}: {error}",
+                )
+            )
+            continue
         plans.append(
             BenchmarkPlan(
                 model.name,
@@ -161,6 +205,11 @@ def load_runner(plan: BenchmarkPlan, work_dir: str) -> tuple[Any, Any]:
     cfg.test_dataloader.sampler.shuffle = False
     if cfg.get("custom_imports"):
         import_modules_from_strings(**cfg.custom_imports)
+    if cfg.get("visualizer") is not None:
+        cfg.visualizer.name = f"benchmark_visualizer_{plan.model}"
+        cfg.visualizer.vis_backends = []
+    if cfg.get("default_hooks") is not None:
+        cfg.default_hooks.pop("visualization", None)
 
     runner = Runner.from_cfg(cfg)
     runner.load_or_resume()
@@ -447,11 +496,12 @@ def _print_dry_run(
             "     checkpoint selection: "
             f"{plan.checkpoint_selection_type or '(none)'}"
         )
-        if plan.checkpoint_path is None:
-            print("     ERROR: No usable checkpoint found.")
+        error = _plan_error(plan)
+        if error is not None:
+            print(f"     action: FAIL ({error})")
             failed = True
         else:
-            print("     action: benchmark")
+            print("     action: BENCHMARK")
     return 1 if failed else 0
 
 
@@ -461,13 +511,13 @@ def run_benchmark(
     all_models: bool, gpu_index: int, warmup: int, samples: int,
     output_dir: Path, dry_run: bool,
 ) -> int:
+    plans = build_plans(config_path, checkpoint_path, all_models)
     try:
         gpu = _validate_cuda(gpu_index)
     except Exception as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}")
         return 1
 
-    plans = build_plans(config_path, checkpoint_path, all_models)
     if dry_run:
         return _print_dry_run(plans, gpu_index, gpu[0], warmup, samples)
 
@@ -476,19 +526,68 @@ def run_benchmark(
     for plan in plans:
         print(f"GPU {gpu_index}: {plan.model} started")
         try:
-            result = benchmark_model(plan, gpu_index, gpu, warmup, samples)
-        except Exception as exc:
-            result = failure_result(plan, exc, gpu_index, gpu, warmup, samples)
-        cleanup_cuda()
-        path = save_model_result(result, output_dir)
-        results.append(result)
-        if result["success"]:
-            print(f"GPU {gpu_index}: {plan.model} finished successfully")
-        else:
-            print(f"GPU {gpu_index}: {plan.model} failed: {result['error']}")
-        print(f"Latency JSON: {_display_path(path)}")
+            planning_error = _plan_error(plan)
+            if planning_error is not None:
+                result = _result(
+                    plan,
+                    gpu_index,
+                    gpu,
+                    warmup,
+                    samples,
+                    success=False,
+                    error=planning_error,
+                )
+            else:
+                try:
+                    result = benchmark_model(
+                        plan, gpu_index, gpu, warmup, samples
+                    )
+                except Exception as exc:
+                    traceback.print_exc()
+                    result = failure_result(
+                        plan, exc, gpu_index, gpu, warmup, samples
+                    )
 
-    rows = save_summary(results, output_dir)
+            path = output_dir / plan.model / "latency.json"
+            try:
+                saved_path = save_model_result(result, output_dir)
+            except OSError as error:
+                write_error = f"{type(error).__name__}: {error}"
+                result["success"] = False
+                result["error"] = (
+                    f"{result['error']}; {write_error}"
+                    if result["error"]
+                    else write_error
+                )
+                print(
+                    f"ERROR: {plan.model} latency JSON write failed at "
+                    f"{path}: {write_error}"
+                )
+                saved_path = None
+
+            results.append(result)
+            if result["success"]:
+                print(
+                    f"GPU {gpu_index}: {plan.model} finished successfully"
+                )
+            else:
+                print(
+                    f"GPU {gpu_index}: {plan.model} failed: "
+                    f"{result['error']}"
+                )
+            if saved_path is not None:
+                print(f"Latency JSON: {_display_path(saved_path)}")
+        finally:
+            cleanup_cuda()
+
+    try:
+        rows = save_summary(results, output_dir)
+    except OSError as error:
+        print(
+            f"ERROR: aggregate benchmark summary write failed in "
+            f"{output_dir}: {type(error).__name__}: {error}"
+        )
+        return 1
     print(f"Summary JSON: {_display_path(output_dir / 'summary.json')}")
     print(f"Summary CSV: {_display_path(output_dir / 'summary.csv')}")
     print_ranking(rows)

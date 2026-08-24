@@ -1,87 +1,183 @@
 # LiDAR model selection
 
-This installable Python package owns research-only concerns: MMDetection3D
-compatibility, experiment configurations, evaluation, benchmarking, and
-recorded-data playback.
+The installable research package owns CenterPoint configuration, MMDetection3D
+compatibility, checkpoint discovery, evaluation, benchmarking, and
+recorded-data playback. It is not part of the production ROS 2 runtime.
 
-Install it from the repository root after provisioning the pinned CUDA,
-PyTorch, MMCV, and MMDetection3D environment:
+Install it from the repository root after provisioning compatible CUDA,
+PyTorch, MMCV, and MMDetection3D versions:
 
 ```bash
 python -m pip install -e research
 ```
 
-The package metadata pins the versions used by this project, but it is not a
-CUDA wheel lock. PyTorch and MMCV must be installed from indexes matching the
-target CUDA toolkit.
+Run every command below from the repository root. The project compares exactly
+`pillar02`, `pillar02_dcn`, `voxel01`, `voxel01_dcn`, `voxel0075`, and
+`voxel0075_dcn` on KITTI Car with batch size 1.
 
-Run research commands from the repository root because dataset paths are
-repository-relative.
+## Training
+
+Single-model mode uses the config's work directory and epoch count unless they
+are overridden:
 
 ```bash
-python research/tools/train.py --all --max-epochs 10
+python research/tools/train.py CONFIG
+python research/tools/train.py CONFIG \
+    --work-dir PATH --max-epochs 20
+python research/tools/train.py CONFIG \
+    --work-dir PATH --max-epochs 20 --resume
 ```
 
-This trains all missing models. Experiment directories use deterministic
-`<model>_screen<N>` names, where `N` is the requested epoch count, such as
-`pillar02_screen10`. One complete model is assigned to each detected GPU, and
-the remaining models wait in a queue.
-
-Preview assignments without starting training:
+All-model mode defaults to 10 epochs:
 
 ```bash
-python research/tools/train.py --all --max-epochs 10 --dry-run
+python research/tools/train.py --all
+python research/tools/train.py --all --max-epochs 20
+python research/tools/train.py --all --max-epochs 20 --resume
+python research/tools/train.py --all --max-epochs 20 --force
+python research/tools/train.py --all --max-epochs 20 --dry-run
 ```
 
-Resume incomplete experiments explicitly:
+One independent model child is assigned to each PyTorch-visible CUDA GPU. The
+remaining models wait in a queue, and a GPU is reused after its current child
+finishes. There is no DDP or `torchrun`. Every child has one physical GPU and a
+separate `research/experiments/<work-directory-name>.console.log`. Failures do
+not stop other children, and any failure makes the final exit code nonzero.
+Dry-run prints the plan and initial assignments without starting training or
+writing outputs, but still requires CUDA. Starting a job replaces its previous
+console log rather than appending to it. Epoch values must be positive.
+
+Fresh all-model target `N` uses
+`research/experiments/<model>_screen<N>`. A usable exact `epoch_<N>.pth` means
+complete and is skipped. An existing directory without that checkpoint fails
+until `--resume` or `--force` is chosen. `--force` deletes and restarts only
+the exact deterministic fresh directory.
+
+Resume searches existing `<model>_screenN` directories for the highest usable
+numeric epoch checkpoint below the target and continues in that same
+directory. For example, `pillar02_screen10/epoch_10.pth` resumes toward epoch
+20 inside `pillar02_screen10`; it does not create `pillar02_screen20`. MMEngine
+resume restores model, optimizer, scheduler, epoch, and iteration state. No
+valid lower checkpoint is an error. `--resume` and `--force` cannot be
+combined.
+
+A best checkpoint is an inference candidate, not completion proof. Completion
+and skipping require exact `epoch_<target>.pth`. After an executed run exits,
+an existing `last_checkpoint` marker must point to that exact file; the marker
+is optional.
+
+Training supplies `OMP_NUM_THREADS=2`, `MKL_NUM_THREADS=2`,
+`OPENBLAS_NUM_THREADS=2`, and `NUMEXPR_NUM_THREADS=2` as defaults. Existing
+user values are preserved. Scheduled children receive them in their copied
+environment, and direct single-model training receives them before framework
+imports.
+
+## Evaluation
 
 ```bash
-python research/tools/train.py --all --max-epochs 10 --resume
-```
-
-Test all available models:
-
-```bash
+python research/tools/test.py CONFIG CHECKPOINT --gpu 0
+python research/tools/test.py CONFIG CHECKPOINT --gpu 0 --dry-run
 python research/tools/test.py --all --gpu 0
+python research/tools/test.py --all --gpu 0 --dry-run
 ```
 
-Testing is sequential on the requested single GPU. Best checkpoints are
-preferred automatically; candidate or latest-epoch fallbacks emit warnings.
-Accuracy results alone do not select the runtime model: single-GPU latency
-benchmarking and JKK testing are still required.
+The nonnegative physical GPU index defaults to 0 and is visible as `cuda:0`;
+models run sequentially. The evaluation path initializes KITTI compatibility,
+MMDetection3D, and inherited custom imports, then calls `Runner.test()`.
+Dry-run resolves configs and checkpoints without loading models or writing
+outputs, but still validates the requested GPU. Failures are recorded per model
+and later models continue.
 
-Benchmark all available models:
+Outputs are `research/evaluations/<model>/metrics.json`,
+`research/evaluations/summary.json`, and
+`research/evaluations/summary.csv`. The primary ranking metric is Car 3D AP40
+Moderate strict, descending. There is no output override; an explicit
+single-model evaluation rewrites the aggregate files with its one result.
+
+Evaluation and all-model benchmarking share inference checkpoint discovery:
+
+1. highest usable `best_*.pth`;
+2. configured candidate checkpoint;
+3. highest usable exact numeric `epoch_N.pth`;
+4. no usable checkpoint: failure.
+
+The configured Pillar 0.2 candidate is
+`research/experiments/pillar02_full/epoch_10.pth`. This inference order is
+separate from numeric-only training resume. Evaluation prints warnings for
+candidate and latest-epoch fallbacks.
+
+## Benchmark
 
 ```bash
+python research/tools/benchmark.py CONFIG CHECKPOINT --gpu 0
 python research/tools/benchmark.py --all --gpu 0
+python research/tools/benchmark.py --all --gpu 0 \
+    --warmup 100 --samples 1000
+python research/tools/benchmark.py --all --gpu 0 --dry-run
 ```
 
-Use custom warm-up and measured sample counts:
+Defaults are GPU 0, 100 warm-up batches, 1000 measured batches, and
+`research/benchmarks` as the output directory. Use `--output-dir PATH` to
+change it. Benchmarking is sequential in one process on one GPU, with batch
+size 1, no workers, unshuffled validation order, and synchronized timing.
+Warm-up batches are excluded; there is no cache-priming or pre-reading stage.
 
-```bash
-python research/tools/benchmark.py \
-    --all \
-    --gpu 0 \
-    --warmup 100 \
-    --samples 1000
-```
+The two measured scopes are:
 
-Benchmarking runs the models sequentially on one GPU. Do not run training or
-testing at the same time. The primary runtime measurement is p95 end-to-end
-latency, and 50 ms is the current 20 Hz requirement. The reported
-`prediction_ms` stage includes network forward, box decoding, and
-NMS/postprocessing because the current CenterPoint API does not expose a
-reliable split between them. Each selected validation frame is read once
-before warm-up so sequential models use the same primed file-cache condition.
+- `prediction_ms`: `model.test_step`, including preprocessing, voxelization,
+  forward inference, decoding, NMS, and postprocessing;
+- `end_to_end_ms`: dataloader retrieval, CPU transforms, collation, and the
+  complete prediction scope.
 
-Generate the accuracy and runtime comparison plots:
+The 20 Hz requirement is end-to-end p95 <= 50 ms. Errors are recorded per
+model when caught, later models continue, and model references, garbage, and
+the CUDA cache are cleaned between attempts. There is no subprocess isolation.
+Any recorded failure produces a nonzero exit code; a successful measurement
+above 50 ms does not. Dry-run validates the requested GPU, configs, and
+checkpoints without loading a Runner, running inference, or writing outputs.
+Workstation results do not prove deployment-hardware performance.
+
+Outputs are `research/benchmarks/<model>/latency.json`,
+`research/benchmarks/summary.json`, and `research/benchmarks/summary.csv`.
+
+## Plots
 
 ```bash
 python research/tools/plot_results.py
 ```
 
-The plots combine existing KITTI metrics from
-`research/evaluations/summary.csv` with single-GPU results from
-`research/benchmarks/summary.csv`.
+The required aggregate inputs are `research/evaluations/summary.csv` and
+`research/benchmarks/summary.csv`. The default output directory is
+`research/reports/figures/`; input and output paths may be overridden with
+`--evaluation-summary`, `--benchmark-summary`, and `--output-dir`.
 
-Nothing in this package is part of the production vehicle runtime.
+The command generates `accuracy_3d_ap40.png`, `accuracy_bev_ap40.png`,
+`latency_percentiles.png`, `accuracy_vs_latency.png`,
+`peak_gpu_memory.png`, `checkpoint_size.png`, and `comparison_table.png`.
+Recommendation ranking first applies end-to-end p95 <= 50 ms eligibility,
+then sorts by Car 3D AP40 Moderate strict descending.
+
+## One-batch smoke test
+
+```bash
+python research/tools/smoke_test.py CONFIG CHECKPOINT --gpu 0
+```
+
+This validates the explicit paths, initializes MMDetection3D and inherited
+custom imports, loads the checkpoint through MMEngine, and processes exactly
+one runner-provided test batch. It validates one prediction with aligned,
+finite boxes, scores, and labels and exactly seven box parameters. It does not
+train, calculate gradients, run full KITTI evaluation, benchmark latency, or
+write result artifacts. The nonnegative physical GPU index defaults to 0 and
+is visible as `cuda:0`.
+
+## Current stage
+
+All six variants completed 20 epochs and have usable exact epoch-20
+checkpoints. The evaluation and benchmark tools have been cleaned and
+validated. Final epoch-20 evaluation must be run or confirmed, and the full
+benchmark must be rerun with the current two-scope implementation; older
+benchmark results are not directly comparable. Final selection ranks accuracy
+first among models meeting the 50 ms p95 requirement, then requires recorded
+JKK qualitative testing and actual deployment-hardware validation. Runtime
+export follows final selection.

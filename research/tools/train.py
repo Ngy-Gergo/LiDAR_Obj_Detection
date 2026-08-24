@@ -10,6 +10,7 @@ import sys
 import time
 import traceback
 from collections import deque
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, TextIO
@@ -21,6 +22,12 @@ RESEARCH_SOURCE = RESEARCH_ROOT / "src"
 EXPERIMENT_ROOT = RESEARCH_ROOT / "experiments"
 DEFAULT_ALL_MAX_EPOCHS = 10
 RUNNABLE_ACTIONS = ("train", "resume", "restart")
+THREAD_ENV_DEFAULTS = {
+    "OMP_NUM_THREADS": "2",
+    "MKL_NUM_THREADS": "2",
+    "OPENBLAS_NUM_THREADS": "2",
+    "NUMEXPR_NUM_THREADS": "2",
+}
 
 if str(RESEARCH_SOURCE) not in sys.path:
     sys.path.insert(0, str(RESEARCH_SOURCE))
@@ -62,6 +69,13 @@ class RunningJob:
     gpu: GpuSlot
     process: subprocess.Popen
     console_stream: TextIO
+
+
+def apply_thread_defaults(
+    environment: MutableMapping[str, str],
+) -> None:
+    for name, value in THREAD_ENV_DEFAULTS.items():
+        environment.setdefault(name, value)
 
 
 def positive_integer(value: str) -> int:
@@ -660,6 +674,7 @@ def start_training_job(
         ])
 
     environment = os.environ.copy()
+    apply_thread_defaults(environment)
     environment["CUDA_VISIBLE_DEVICES"] = gpu.visibility_token
     environment["PYTHONUNBUFFERED"] = "1"
     try:
@@ -934,6 +949,7 @@ def train_single(args: argparse.Namespace) -> int:
         print(f"ERROR: Config does not exist: {config_path}", file=sys.stderr)
         return 1
 
+    apply_thread_defaults(os.environ)
     from lidar_model_selection.compat.kitti_evaluator import install
 
     install()
