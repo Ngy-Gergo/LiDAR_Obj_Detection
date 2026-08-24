@@ -208,9 +208,11 @@ def _effective_config() -> _FakeConfig:
     )
 
 
+@pytest.mark.parametrize("explicit", [False, True])
 def test_create_training_run_generates_id_before_config_and_snapshots_exact_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    explicit: bool,
 ) -> None:
     source = tmp_path / "source.py"
     source.write_text("source = True\n", encoding="utf-8")
@@ -221,7 +223,13 @@ def test_create_training_run_generates_id_before_config_and_snapshots_exact_byte
     dataset = SimpleNamespace(identity_sha256="d" * 64)
     environment = SimpleNamespace(packages=(("torch", "2"),), python_version="3.10")
 
-    monkeypatch.setattr(training, "source_config_for_slug", lambda slug: source)
+    monkeypatch.setattr(
+        training,
+        "source_config_for_slug",
+        (lambda slug: source)
+        if not explicit
+        else (lambda slug: (_ for _ in ()).throw(AssertionError("catalog used"))),
+    )
     monkeypatch.setattr(
         training,
         "generate_run_id",
@@ -253,6 +261,7 @@ def test_create_training_run_generates_id_before_config_and_snapshots_exact_byte
     created = create_training_run(
         "pillar02",
         7,
+        source_config=(source if explicit else None),
         runs_root=tmp_path / "runs",
         repository_root=tmp_path,
         config_overrides={"optim_wrapper.optimizer.lr": 0.001},

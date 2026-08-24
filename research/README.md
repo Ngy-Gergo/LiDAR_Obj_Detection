@@ -1,92 +1,39 @@
 # LiDAR model selection
 
-> **Architecture recovery checkpoint:** most command examples below describe
-> the retired `screenN`/checkpoint-discovery workflow. Do not use them for new
-> work. See [PROGRESS.md](PROGRESS.md) for the validated run-owned interfaces,
-> intentional temporary breakages, and the next continuation task.
+The `lidar-model-selection` package owns the research lifecycle:
 
-This installable Python package owns research-only concerns: MMDetection3D
-compatibility, experiment configurations, evaluation, benchmarking, and
-recorded-data playback.
+- durable run, provenance, checkpoint, and result evidence;
+- canonical MMEngine config materialization and run-local training/resume;
+- one-run evaluation, synchronized research benchmarking, and smoke execution;
+- explicit historical import, compatible comparison, and renderer-only plots;
+- focused preflight and one-experiment pipeline orchestration.
 
-Install it from the repository root after provisioning the pinned CUDA,
-PyTorch, MMCV, and MMDetection3D environment:
+Install from the repository root:
 
 ```bash
 python -m pip install -e research
 ```
 
-The package metadata pins the versions used by this project, but it is not a
-CUDA wheel lock. PyTorch and MMCV must be installed from indexes matching the
-target CUDA toolkit.
-
-Run research commands from the repository root because dataset paths are
-repository-relative.
+The convenient end-to-end command accepts either a catalog preset or an
+explicit config. Both use the same ordinary `Run` creation and execution path:
 
 ```bash
-python research/tools/train.py --all --max-epochs 10
+python research/tools/run.py pillar02 --max-epochs 20
+
+python research/tools/run.py \
+  --config research/configs/my_experiment.py \
+  --name my-experiment \
+  --max-epochs 20
 ```
 
-This trains all missing models. Experiment directories use deterministic
-`<model>_screen<N>` names, where `N` is the requested epoch count, such as
-`pillar02_screen10`. One complete model is assigned to each detected GPU, and
-the remaining models wait in a queue.
+The lower-level run-owned commands are `train.py`, `evaluate.py`,
+`benchmark.py`, `smoke_test.py`, `compare.py`, `plot.py`, and `import_run.py`.
+They accept explicit run or result identities and never scan global experiment
+directories or guess checkpoints.
 
-Preview assignments without starting training:
-
-```bash
-python research/tools/train.py --all --max-epochs 10 --dry-run
-```
-
-Resume incomplete experiments explicitly:
-
-```bash
-python research/tools/train.py --all --max-epochs 10 --resume
-```
-
-Test all available models:
-
-```bash
-python research/tools/test.py --all --gpu 0
-```
-
-Testing is sequential on the requested single GPU. Best checkpoints are
-preferred automatically; candidate or latest-epoch fallbacks emit warnings.
-Accuracy results alone do not select the runtime model: single-GPU latency
-benchmarking and JKK testing are still required.
-
-Benchmark all available models:
-
-```bash
-python research/tools/benchmark.py --all --gpu 0
-```
-
-Use custom warm-up and measured sample counts:
-
-```bash
-python research/tools/benchmark.py \
-    --all \
-    --gpu 0 \
-    --warmup 100 \
-    --samples 1000
-```
-
-Benchmarking runs the models sequentially on one GPU. Do not run training or
-testing at the same time. The primary runtime measurement is p95 end-to-end
-latency, and 50 ms is the current 20 Hz requirement. The reported
-`prediction_ms` stage includes network forward, box decoding, and
-NMS/postprocessing because the current CenterPoint API does not expose a
-reliable split between them. Each selected validation frame is read once
-before warm-up so sequential models use the same primed file-cache condition.
-
-Generate the accuracy and runtime comparison plots:
-
-```bash
-python research/tools/plot_results.py
-```
-
-The plots combine existing KITTI metrics from
-`research/evaluations/summary.csv` with single-GPU results from
-`research/benchmarks/summary.csv`.
+Generated runs live under `research/runs/` and are ignored by Git. Each native
+run owns its canonical config, training directory, exact final and selected
+checkpoint identities, immutable results, and pipeline records. Imported
+historical runs remain non-resumable and retain unknown provenance as unknown.
 
 Nothing in this package is part of the production vehicle runtime.

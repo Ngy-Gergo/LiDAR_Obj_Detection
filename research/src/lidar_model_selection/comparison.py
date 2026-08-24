@@ -30,7 +30,7 @@ __all__ = (
     "load_comparison_report",
 )
 
-COMPARISON_SCHEMA_VERSION = 1
+COMPARISON_SCHEMA_VERSION = 2
 DEFAULT_RUNS_ROOT = Path(__file__).absolute().parents[3] / "research" / "runs"
 
 _KITTI_PREFIX = "Kitti metric/pred_instances_3d/KITTI/"
@@ -83,6 +83,7 @@ RUNTIME_COMPATIBILITY_FIELDS = (
     "runtime.timing_scope",
     "runtime.statistic",
     "runtime.hardware_class",
+    "runtime.host_identity",
     "runtime.precision",
     "runtime.batch_size",
     "runtime.workload_policy",
@@ -240,11 +241,17 @@ class ComparisonRow:
     accuracy_raw_key: str
     accuracy_value: float
     accuracy_rank: int
+    ap40: Mapping[str, float]
     benchmark_result_id: str | None = None
     runtime_scope: str | None = None
     runtime_statistic: str | None = None
     runtime_value: float | None = None
     runtime_rank: int | None = None
+    latency_statistics: Mapping[str, Mapping[str, float]] | None = None
+    peak_memory_allocated_bytes: int | None = None
+    peak_memory_reserved_bytes: int | None = None
+    checkpoint_size_bytes: int | None = None
+    meets_20hz: bool | None = None
 
     def __post_init__(self) -> None:
         validate_run_id(self.run_id)
@@ -273,6 +280,27 @@ class ComparisonRow:
             _finite_number(self.accuracy_value, description="row accuracy value"),
         )
         _require_positive_integer(self.accuracy_rank, description="accuracy rank")
+        ap40 = _require_mapping(self.ap40, description="row AP40 evidence")
+        if (
+            self.accuracy_metric not in ap40
+            or not set(ap40).issubset(KITTI_CAR_AP40_METRICS)
+        ):
+            raise ValueError(
+                "row AP40 evidence must contain the selected metric and only "
+                "supported AP40 metrics"
+            )
+        object.__setattr__(
+            self,
+            "ap40",
+            MappingProxyType(
+                {
+                    metric: _finite_number(
+                        ap40[metric], description=f"row AP40 metric {metric}"
+                    )
+                    for metric in ap40
+                }
+            ),
+        )
 
         runtime_values = (
             self.benchmark_result_id,
@@ -282,6 +310,17 @@ class ComparisonRow:
             self.runtime_rank,
         )
         if all(value is None for value in runtime_values):
+            if any(
+                value is not None
+                for value in (
+                    self.latency_statistics,
+                    self.peak_memory_allocated_bytes,
+                    self.peak_memory_reserved_bytes,
+                    self.checkpoint_size_bytes,
+                    self.meets_20hz,
+                )
+            ):
+                raise ValueError("row ancillary benchmark evidence requires runtime")
             return
         if any(value is None for value in runtime_values):
             raise ValueError("row runtime evidence must be wholly present or absent")
@@ -301,6 +340,41 @@ class ComparisonRow:
             _finite_number(self.runtime_value, description="row runtime value"),
         )
         _require_positive_integer(self.runtime_rank, description="runtime rank")
+        statistics = _require_mapping(
+            self.latency_statistics, description="row latency statistics"
+        )
+        if not statistics or not set(statistics).issubset(RUNTIME_SCOPES):
+            raise ValueError("row latency statistics contain invalid timing scopes")
+        normalized_statistics: dict[str, Mapping[str, float]] = {}
+        for scope in statistics:
+            scope_values = _require_mapping(
+                statistics[scope], description=f"row {scope} statistics"
+            )
+            if not scope_values or not set(scope_values).issubset(RUNTIME_STATISTICS):
+                raise ValueError(f"row {scope} contains invalid statistics")
+            normalized_statistics[scope] = MappingProxyType(
+                {
+                    statistic: _finite_number(
+                        scope_values[statistic],
+                        description=f"row {scope} {statistic}",
+                    )
+                    for statistic in scope_values
+                }
+            )
+        object.__setattr__(
+            self, "latency_statistics", MappingProxyType(normalized_statistics)
+        )
+        for value, description in (
+            (self.peak_memory_allocated_bytes, "allocated peak memory"),
+            (self.peak_memory_reserved_bytes, "reserved peak memory"),
+            (self.checkpoint_size_bytes, "checkpoint size"),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError(f"row {description} must be a non-negative integer")
+        if self.meets_20hz is not None and not isinstance(self.meets_20hz, bool):
+            raise TypeError("row meets_20hz must be a boolean")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -313,11 +387,24 @@ class ComparisonRow:
             "accuracy_raw_key": self.accuracy_raw_key,
             "accuracy_value": self.accuracy_value,
             "accuracy_rank": self.accuracy_rank,
+            "ap40": dict(self.ap40),
             "benchmark_result_id": self.benchmark_result_id,
             "runtime_scope": self.runtime_scope,
             "runtime_statistic": self.runtime_statistic,
             "runtime_value": self.runtime_value,
             "runtime_rank": self.runtime_rank,
+            "latency_statistics": (
+                None
+                if self.latency_statistics is None
+                else {
+                    scope: dict(values)
+                    for scope, values in self.latency_statistics.items()
+                }
+            ),
+            "peak_memory_allocated_bytes": self.peak_memory_allocated_bytes,
+            "peak_memory_reserved_bytes": self.peak_memory_reserved_bytes,
+            "checkpoint_size_bytes": self.checkpoint_size_bytes,
+            "meets_20hz": self.meets_20hz,
         }
 
     @classmethod
@@ -335,11 +422,17 @@ class ComparisonRow:
                 "accuracy_raw_key",
                 "accuracy_value",
                 "accuracy_rank",
+                "ap40",
                 "benchmark_result_id",
                 "runtime_scope",
                 "runtime_statistic",
                 "runtime_value",
                 "runtime_rank",
+                "latency_statistics",
+                "peak_memory_allocated_bytes",
+                "peak_memory_reserved_bytes",
+                "checkpoint_size_bytes",
+                "meets_20hz",
             },
             description="comparison row",
         )
@@ -730,6 +823,19 @@ def _accuracy_value(
     )
 
 
+def _available_ap40(
+    record: ResultRecord,
+    payload: Mapping[str, Any],
+) -> Mapping[str, float]:
+    projected: dict[str, float] = {}
+    for metric in KITTI_CAR_AP40_METRICS:
+        try:
+            projected[metric] = _accuracy_value(record, payload, metric)
+        except KeyError:
+            continue
+    return MappingProxyType(projected)
+
+
 def _task_class_schema(run: Run) -> object:
     dataset = run.manifest.dataset
     return {
@@ -844,6 +950,38 @@ def _runtime_hardware(
     }
 
 
+def _runtime_host_identity(
+    record: ResultRecord,
+    payload: Mapping[str, Any],
+    source: Mapping[str, Any] | None,
+    *,
+    scope: str,
+) -> object:
+    if scope == "prediction_ms":
+        return "not-applicable-prediction-scope"
+    hardware = _optional_mapping(payload.get("hardware"), description="benchmark hardware")
+    if hardware is not None:
+        host = _optional_mapping(hardware.get("host"), description="benchmark host")
+        if host is not None:
+            return {
+                "cpu_model": host.get("cpu_model"),
+                "architecture": host.get("architecture"),
+                "os_class": host.get("os_class"),
+            }
+    if source is not None:
+        return {
+            "cpu_model": source.get("cpu_model"),
+            "architecture": source.get("architecture"),
+            "os_class": source.get("os_class"),
+        }
+    environment = record.environment
+    return {
+        "cpu_model": None,
+        "architecture": None if environment is None else environment.machine,
+        "os_class": None,
+    }
+
+
 def _runtime_precision(
     payload: Mapping[str, Any],
     source: Mapping[str, Any] | None,
@@ -910,7 +1048,9 @@ def _runtime_observations(
             return workload[name]
         if source is None:
             return None
-        return source.get(name if historical_name is None else historical_name)
+        if name in source:
+            return source[name]
+        return None if historical_name is None else source.get(historical_name)
 
     methodology = _optional_mapping(
         payload.get("methodology"),
@@ -925,6 +1065,9 @@ def _runtime_observations(
         "runtime.timing_scope": timing_scope,
         "runtime.statistic": statistic_evidence,
         "runtime.hardware_class": _runtime_hardware(payload, source),
+        "runtime.host_identity": _runtime_host_identity(
+            record, payload, source, scope=scope
+        ),
         "runtime.precision": _runtime_precision(payload, source),
         "runtime.batch_size": batch_size,
         "runtime.workload_policy": {
@@ -980,6 +1123,21 @@ def _runtime_value(
             raise ValueError(f"benchmark {scope}.{statistic} must be non-negative")
         return result
     source = _source_record(payload)
+    source_scope = (
+        None
+        if source is None
+        else _optional_mapping(
+            source.get(scope), description=f"historical benchmark scope {scope}"
+        )
+    )
+    if source_scope is not None and statistic in source_scope:
+        result = _finite_number(
+            source_scope[statistic],
+            description=f"historical benchmark {scope}.{statistic}",
+        )
+        if result < 0.0:
+            raise ValueError(f"historical benchmark {scope}.{statistic} must be non-negative")
+        return result
     legacy_prefix = "prediction" if scope == "prediction_ms" else "end_to_end"
     legacy_key = f"{legacy_prefix}_{statistic}"
     if source is not None and legacy_key in source:
@@ -995,6 +1153,103 @@ def _runtime_value(
     raise KeyError(
         f"benchmark result {record.result_id} has no exact statistic "
         f"{scope}.{statistic}"
+    )
+
+
+def _optional_nonnegative_integer(value: object, *, description: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{description} must be a non-negative integer")
+    return value
+
+
+def _benchmark_ancillary(
+    record: ResultRecord,
+    payload: Mapping[str, Any],
+) -> tuple[Mapping[str, Mapping[str, float]], int | None, int | None, int | None, bool | None]:
+    source = _source_record(payload)
+    timings: dict[str, Mapping[str, float]] = {}
+    for scope in RUNTIME_SCOPES:
+        values: dict[str, float] = {}
+        native = _optional_mapping(payload.get(scope), description=f"benchmark {scope}")
+        historical = (
+            None
+            if source is None
+            else _optional_mapping(
+                source.get(scope), description=f"historical benchmark {scope}"
+            )
+        )
+        legacy_prefix = "prediction" if scope == "prediction_ms" else "end_to_end"
+        for statistic in RUNTIME_STATISTICS:
+            candidate = None if native is None else native.get(statistic)
+            if candidate is None and historical is not None:
+                candidate = historical.get(statistic)
+            if candidate is None and source is not None:
+                candidate = source.get(f"{legacy_prefix}_{statistic}")
+            if candidate is not None:
+                number = _finite_number(
+                    candidate, description=f"benchmark {scope}.{statistic}"
+                )
+                if number < 0.0:
+                    raise ValueError(f"benchmark {scope}.{statistic} must be non-negative")
+                values[statistic] = number
+        if values:
+            timings[scope] = MappingProxyType(values)
+
+    peak = _optional_mapping(payload.get("peak_memory"), description="peak memory")
+    checkpoint = _optional_mapping(payload.get("checkpoint"), description="checkpoint")
+    allocated = None if peak is None else peak.get("allocated_bytes")
+    reserved = None if peak is None else peak.get("reserved_bytes")
+    size = None if checkpoint is None else checkpoint.get("size_bytes")
+    if source is not None:
+        allocated = source.get("peak_memory_allocated_bytes", allocated)
+        reserved = source.get("peak_memory_reserved_bytes", reserved)
+        size = source.get("checkpoint_size_bytes", size)
+        if allocated is None and source.get("peak_memory_allocated_mb") is not None:
+            allocated = round(
+                _finite_number(
+                    source["peak_memory_allocated_mb"],
+                    description="historical allocated peak memory MiB",
+                )
+                * 1024**2
+            )
+        if reserved is None and source.get("peak_memory_reserved_mb") is not None:
+            reserved = round(
+                _finite_number(
+                    source["peak_memory_reserved_mb"],
+                    description="historical reserved peak memory MiB",
+                )
+                * 1024**2
+            )
+        if size is None and source.get("checkpoint_size_mb") is not None:
+            size = round(
+                _finite_number(
+                    source["checkpoint_size_mb"],
+                    description="historical checkpoint size MiB",
+                )
+                * 1024**2
+            )
+
+    end_to_end = _optional_mapping(
+        payload.get("end_to_end_ms"), description="end-to-end benchmark evidence"
+    )
+    meets = None if end_to_end is None else end_to_end.get("meets_20hz")
+    if meets is None and source is not None:
+        meets = source.get("meets_20hz")
+        historical_e2e = _optional_mapping(
+            source.get("end_to_end_ms"), description="historical end-to-end evidence"
+        )
+        if meets is None and historical_e2e is not None:
+            meets = historical_e2e.get("meets_20hz")
+    if meets is not None and not isinstance(meets, bool):
+        raise TypeError(f"benchmark result {record.result_id} has invalid meets_20hz")
+    return (
+        MappingProxyType(timings),
+        _optional_nonnegative_integer(allocated, description="allocated peak memory"),
+        _optional_nonnegative_integer(reserved, description="reserved peak memory"),
+        _optional_nonnegative_integer(size, description="checkpoint size"),
+        meets,
     )
 
 
@@ -1085,7 +1340,18 @@ def compare_runs(
     evaluations: dict[str, ResultRecord] = {}
     benchmarks: dict[str, ResultRecord] = {}
     accuracy_values: dict[str, float] = {}
+    ap40_values: dict[str, Mapping[str, float]] = {}
     runtime_values: dict[str, float] = {}
+    benchmark_ancillary: dict[
+        str,
+        tuple[
+            Mapping[str, Mapping[str, float]],
+            int | None,
+            int | None,
+            int | None,
+            bool | None,
+        ],
+    ] = {}
     compatibility: dict[str, dict[str, object]] = {
         field: {} for field in ACCURACY_COMPATIBILITY_FIELDS
     }
@@ -1106,6 +1372,7 @@ def compare_runs(
             evaluation_payload,
             accuracy_metric,
         )
+        ap40_values[run.run_id] = _available_ap40(evaluation, evaluation_payload)
         accuracy_observations = _accuracy_observations(
             run,
             evaluation_payload,
@@ -1126,6 +1393,9 @@ def compare_runs(
                 benchmark_payload,
                 scope=runtime_scope,
                 statistic=runtime_statistic,
+            )
+            benchmark_ancillary[run.run_id] = _benchmark_ancillary(
+                benchmark, benchmark_payload
             )
             runtime_observations = _runtime_observations(
                 run,
@@ -1152,6 +1422,7 @@ def compare_runs(
         assert selected_checkpoint is not None
         evaluation = evaluations[run.run_id]
         benchmark = benchmarks.get(run.run_id)
+        ancillary = benchmark_ancillary.get(run.run_id)
         rows.append(
             ComparisonRow(
                 run_id=run.run_id,
@@ -1163,6 +1434,7 @@ def compare_runs(
                 accuracy_raw_key=KITTI_CAR_AP40_METRICS[accuracy_metric],
                 accuracy_value=accuracy_values[run.run_id],
                 accuracy_rank=accuracy_ranks[run.run_id],
+                ap40=ap40_values[run.run_id],
                 benchmark_result_id=(
                     None if benchmark is None else benchmark.result_id
                 ),
@@ -1170,6 +1442,15 @@ def compare_runs(
                 runtime_statistic=runtime_statistic,
                 runtime_value=runtime_values.get(run.run_id),
                 runtime_rank=runtime_ranks.get(run.run_id),
+                latency_statistics=(None if ancillary is None else ancillary[0]),
+                peak_memory_allocated_bytes=(
+                    None if ancillary is None else ancillary[1]
+                ),
+                peak_memory_reserved_bytes=(
+                    None if ancillary is None else ancillary[2]
+                ),
+                checkpoint_size_bytes=(None if ancillary is None else ancillary[3]),
+                meets_20hz=(None if ancillary is None else ancillary[4]),
             )
         )
 

@@ -385,6 +385,9 @@ def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
         "reserved_mib": 3.0,
     }
     assert dict(record.payload["hardware"])["device_name"] == "Fake GPU"
+    host = dict(dict(record.payload["hardware"])["host"])
+    assert set(host) == {"cpu_model", "architecture", "os_class"}
+    assert all(isinstance(value, str) for value in host.values())
     assert dict(record.payload["precision"])["model_parameter_dtypes"] == (
         "torch.float32",
     )

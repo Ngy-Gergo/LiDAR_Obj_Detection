@@ -9,6 +9,9 @@ def test_research_packages_are_lightweight() -> None:
     importlib.import_module("lidar_model_selection")
     importlib.import_module("lidar_model_selection.compat")
     importlib.import_module("lidar_model_selection.playback")
+    importlib.import_module("lidar_model_selection.pipeline")
+    importlib.import_module("lidar_model_selection.plotting")
+    importlib.import_module("lidar_model_selection.preflight")
 
     loaded = set(sys.modules) - before
     for forbidden_prefix in (

@@ -4,20 +4,31 @@ The repository is a monorepo with independent research and deployment
 packages.
 
 ```text
-research configuration and training
-              |
-              v
-      frozen model artifact
-              |
-              v
-production vehicle runtime
+config or catalog preset -> canonical Run -> train -> exact checkpoint
+                                                |-> evaluation result
+                                                |-> benchmark result
+                                                        |
+                                                   comparison -> plots
+
+selected research Run -> future export/parity -> frozen artifact -> runtime
 ```
 
 ## Research
 
 `research/` is an installable Python project named `lidar-model-selection`.
 It owns MMDetection3D configuration, version-pinned compatibility adapters,
-evaluation, benchmarking, and recorded-data playback.
+run/config/checkpoint evidence, training, evaluation, benchmarking, comparison,
+plotting, and recorded-data playback. One canonical `Run` owns all native
+experiment identity. Evaluation and benchmarking consume only its verified
+selected checkpoint; they never search globally for artifacts.
+
+`storage.py` owns generic durable persistence; `provenance.py` evidence;
+`checkpoints.py` checkpoint identity; `runs.py` run lifecycle; `results.py`
+immutable results; `training.py` MMEngine training; `evaluation.py` and
+`benchmarking.py` one-run execution; `comparison.py` compatibility/ranking;
+`plotting.py` rendering; `preflight.py` cheap readiness checks; and
+`pipeline.py` one ordinary experiment orchestration. Command-line tools remain
+thin callers of these package functions.
 
 The existing ROS 2 playback node remains here because it reads recorded KITTI
 files and reconstructs a model from a training configuration and checkpoint.

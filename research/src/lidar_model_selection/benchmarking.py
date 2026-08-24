@@ -6,6 +6,7 @@ import gc
 import importlib
 import math
 import os
+import platform
 import sys
 import tempfile
 import time
@@ -218,6 +219,24 @@ def _cleanup_cuda() -> None:
         pass
 
 
+def _host_identity() -> dict[str, str]:
+    """Capture only stable host evidence material to E2E timing."""
+    cpu_model = platform.processor().strip()
+    if not cpu_model:
+        try:
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+                if line.lower().startswith("model name"):
+                    cpu_model = line.partition(":")[2].strip()
+                    break
+        except OSError:
+            pass
+    return {
+        "cpu_model": " ".join(cpu_model.split()),
+        "architecture": platform.machine().strip(),
+        "os_class": platform.system().strip(),
+    }
+
+
 def _force_test_dataloader(config: object) -> None:
     dataloader = _value(config, "test_dataloader", None)
     if dataloader is None:
@@ -411,6 +430,7 @@ def _execute_mmengine(
                 "visible_device_count": 1,
                 "device_name": str(cuda.get_device_name(0)),
                 "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                "host": _host_identity(),
             }
             measured["precision"] = {
                 "execution_policy": "torch_inference_mode_no_autocast",

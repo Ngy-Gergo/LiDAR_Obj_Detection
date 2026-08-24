@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
@@ -224,6 +225,58 @@ def test_dataset_identity_is_deterministic_and_keeps_semantics_separate(
     assert changed_framework_key.identity_sha256 != first.identity_sha256
 
 
+def test_dataset_identity_is_portable_but_semantic_changes_are_distinct(
+    tmp_path: Path,
+) -> None:
+    roots = (tmp_path / "machine-a" / "KITTI", tmp_path / "machine-b" / "data")
+    identities = []
+    for root in roots:
+        root.mkdir(parents=True)
+        annotation = root / "kitti_infos_train.pkl"
+        annotation.write_bytes(b"same annotation bytes")
+        identities.append(
+            build_dataset_identity(
+                name="KITTI",
+                version="object-v1",
+                root_reference=str(root.absolute()),
+                semantic_partition="KITTI train/validation",
+                framework_key="test_dataloader",
+                annotation_files=identify_file_set(root, [annotation]),
+                class_names=["Car"],
+                tasks={"3d_detection": ["Car"]},
+            )
+        )
+
+    first, relocated = identities
+    assert first.root_reference != relocated.root_reference
+    assert first.identity_sha256 == relocated.identity_sha256
+
+    def changed(**overrides: object) -> DatasetIdentity:
+        values = {
+            "name": "KITTI",
+            "version": "object-v1",
+            "root_reference": first.root_reference,
+            "semantic_partition": "KITTI train/validation",
+            "framework_key": "test_dataloader",
+            "annotation_files": first.annotation_files,
+            "class_names": ["Car"],
+            "tasks": {"3d_detection": ["Car"]},
+        }
+        values.update(overrides)
+        return build_dataset_identity(**values)  # type: ignore[arg-type]
+
+    altered_root = tmp_path / "altered"
+    altered_root.mkdir()
+    altered_file = altered_root / "kitti_infos_train.pkl"
+    altered_file.write_bytes(b"different annotation bytes")
+    altered_annotations = identify_file_set(altered_root, [altered_file])
+    assert changed(annotation_files=altered_annotations).identity_sha256 != first.identity_sha256
+    assert changed(semantic_partition="KITTI test").identity_sha256 != first.identity_sha256
+    assert changed(class_names=["Car", "Cyclist"]).identity_sha256 != first.identity_sha256
+    assert changed(tasks={"3d_detection": ["Cyclist"]}).identity_sha256 != first.identity_sha256
+    assert changed(version="object-v2").identity_sha256 != first.identity_sha256
+
+
 def test_dataset_identity_preserves_explicit_unknowns() -> None:
     unknown = build_dataset_identity(
         name=None,
@@ -238,6 +291,37 @@ def test_dataset_identity_preserves_explicit_unknowns() -> None:
 
     assert DatasetIdentity.from_dict(unknown.to_dict()) == unknown
     assert unknown.to_dict()["semantic_partition"] is None
+
+
+def test_legacy_path_bound_dataset_identity_records_keep_v1_meaning() -> None:
+    current = build_dataset_identity(
+        name="KITTI",
+        version="object-v1",
+        root_reference="/legacy/mount/KITTI",
+        semantic_partition="KITTI validation",
+        framework_key="test_dataloader",
+        annotation_files=None,
+        class_names=["Car"],
+        tasks={"3d_detection": ["Car"]},
+    )
+    document = current.to_dict()
+    document["scheme"] = "lidar-dataset-v1"
+    identity_payload = dict(document)
+    identity_payload.pop("identity_sha256")
+    document["identity_sha256"] = hashlib.sha256(
+        json.dumps(
+            identity_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    loaded = DatasetIdentity.from_dict(document)
+    assert loaded.scheme == "lidar-dataset-v1"
+    assert loaded.root_reference == "/legacy/mount/KITTI"
+    assert loaded.identity_sha256 != current.identity_sha256
 
 
 def test_create_native_run_transactionally_publishes_canonical_layout(

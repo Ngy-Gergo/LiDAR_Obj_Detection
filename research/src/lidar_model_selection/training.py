@@ -366,12 +366,13 @@ def create_training_run(
     model_slug: str,
     target_epoch: int,
     *,
+    source_config: Path | None = None,
     runs_root: Path = DEFAULT_RUNS_ROOT,
     repository_root: Path = DEFAULT_REPOSITORY_ROOT,
     config_overrides: Mapping[str, object] | None = None,
     parent_run: Run | None = None,
 ) -> Run:
-    """Create one native run from a canonical catalog config snapshot."""
+    """Create one native run from a catalog preset or explicit MMEngine config."""
     target = _positive_epoch(target_epoch)
     if not isinstance(runs_root, Path) or not isinstance(repository_root, Path):
         raise TypeError("runs_root and repository_root must be pathlib.Path values")
@@ -382,10 +383,16 @@ def create_training_run(
     ):
         raise ValueError("parent run must belong to the same runs_root")
 
-    source = source_config_for_slug(model_slug)
+    if source_config is not None and not isinstance(source_config, Path):
+        raise TypeError("source_config must be a pathlib.Path or None")
+    source = (
+        source_config_for_slug(model_slug)
+        if source_config is None
+        else _absolute(source_config)
+    )
     metadata = source.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"catalog source config must be a regular file: {source}")
+        raise ValueError(f"source config must be a regular file: {source}")
 
     # The ID comes first because its final directory is part of the exact config.
     run_id = generate_run_id(model_slug)

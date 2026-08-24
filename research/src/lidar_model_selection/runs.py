@@ -51,7 +51,8 @@ __all__ = (
 )
 
 RUN_SCHEMA_VERSION = 1
-DATASET_IDENTITY_SCHEME = "lidar-dataset-v1"
+DATASET_IDENTITY_SCHEME = "lidar-dataset-v2"
+_LEGACY_DATASET_IDENTITY_SCHEME = "lidar-dataset-v1"
 
 _CONFIG_PATH = "config.py"
 _MANIFEST_NAME = "manifest.json"
@@ -135,7 +136,7 @@ def _require_utc_timestamp(value: object, *, description: str) -> str:
     if not timestamp.endswith("Z"):
         raise ValueError(f"{description} must be an ISO-8601 UTC timestamp")
     try:
-        parsed = datetime.fromisoformat(timestamp[:-1] + "+00:00")
+        parsed = _parse_utc_timestamp(timestamp)
     except ValueError as error:
         raise ValueError(
             f"{description} must be an ISO-8601 UTC timestamp"
@@ -146,7 +147,12 @@ def _require_utc_timestamp(value: object, *, description: str) -> str:
 
 
 def _parse_utc_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value[:-1] + "+00:00")
+    for pattern in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, pattern).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError("invalid ISO-8601 UTC timestamp")
 
 
 def _validate_slug(slug: object) -> str:
@@ -334,6 +340,7 @@ def _normalize_tasks(
 
 def _dataset_payload(
     *,
+    scheme: str = DATASET_IDENTITY_SCHEME,
     name: str | None,
     version: str | None,
     root_reference: str | None,
@@ -344,7 +351,7 @@ def _dataset_payload(
     tasks: tuple[tuple[str, tuple[str, ...]], ...] | None,
 ) -> dict[str, object]:
     return {
-        "scheme": DATASET_IDENTITY_SCHEME,
+        "scheme": scheme,
         "name": name,
         "version": version,
         "root_reference": root_reference,
@@ -363,6 +370,14 @@ def _dataset_payload(
             ]
         ),
     }
+
+
+def _dataset_identity_payload(evidence: Mapping[str, object]) -> dict[str, object]:
+    """Return scheme-specific semantic evidence used for identity hashing."""
+    payload = dict(evidence)
+    if payload["scheme"] == DATASET_IDENTITY_SCHEME:
+        payload.pop("root_reference")
+    return payload
 
 
 def _canonical_hash(value: object) -> str:
@@ -390,7 +405,10 @@ class DatasetIdentity:
     tasks: tuple[tuple[str, tuple[str, ...]], ...] | None
 
     def __post_init__(self) -> None:
-        if self.scheme != DATASET_IDENTITY_SCHEME:
+        if self.scheme not in {
+            DATASET_IDENTITY_SCHEME,
+            _LEGACY_DATASET_IDENTITY_SCHEME,
+        }:
             raise ValueError(f"unsupported dataset identity scheme: {self.scheme!r}")
         _require_sha256(self.identity_sha256, description="dataset identity_sha256")
         for value, description in (
@@ -415,15 +433,18 @@ class DatasetIdentity:
         if self.tasks != _normalize_tasks(task_mapping):
             raise ValueError("dataset tasks are not canonical")
         expected = _canonical_hash(
-            _dataset_payload(
-                name=self.name,
-                version=self.version,
-                root_reference=self.root_reference,
-                semantic_partition=self.semantic_partition,
-                framework_key=self.framework_key,
-                annotation_files=self.annotation_files,
-                class_names=self.class_names,
-                tasks=self.tasks,
+            _dataset_identity_payload(
+                _dataset_payload(
+                    scheme=self.scheme,
+                    name=self.name,
+                    version=self.version,
+                    root_reference=self.root_reference,
+                    semantic_partition=self.semantic_partition,
+                    framework_key=self.framework_key,
+                    annotation_files=self.annotation_files,
+                    class_names=self.class_names,
+                    tasks=self.tasks,
+                )
             )
         )
         if self.identity_sha256 != expected:
@@ -431,6 +452,7 @@ class DatasetIdentity:
 
     def to_dict(self) -> dict[str, object]:
         result = _dataset_payload(
+            scheme=self.scheme,
             name=self.name,
             version=self.version,
             root_reference=self.root_reference,
@@ -535,6 +557,7 @@ def build_dataset_identity(
     )
     normalized_tasks = _normalize_tasks(tasks)
     payload = _dataset_payload(
+        scheme=DATASET_IDENTITY_SCHEME,
         name=name,
         version=version,
         root_reference=root_reference,
@@ -546,7 +569,7 @@ def build_dataset_identity(
     )
     return DatasetIdentity(
         scheme=DATASET_IDENTITY_SCHEME,
-        identity_sha256=_canonical_hash(payload),
+        identity_sha256=_canonical_hash(_dataset_identity_payload(payload)),
         name=name,
         version=version,
         root_reference=root_reference,

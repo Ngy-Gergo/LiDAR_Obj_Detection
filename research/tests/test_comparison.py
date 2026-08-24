@@ -202,6 +202,11 @@ def _benchmark_payload(
             "visible_device_count": 1,
             "device_name": hardware,
             "cuda_visible_devices": "0",
+            "host": {
+                "cpu_model": "Test CPU",
+                "architecture": "x86_64",
+                "os_class": "Linux",
+            },
         },
         "precision": {
             "execution_policy": "torch_inference_mode_no_autocast",
@@ -428,6 +433,70 @@ def test_runtime_hardware_mismatch_requires_specific_waiver(tmp_path: Path) -> N
     assert report.waivers == (waiver,)
 
 
+def test_e2e_host_mismatch_or_unknown_requires_persisted_waiver(
+    tmp_path: Path,
+) -> None:
+    first = _run(tmp_path, slug="host-one", digest_character="1")
+    second = _run(tmp_path, slug="host-two", digest_character="2")
+    for run in (first, second):
+        _record(
+            run,
+            result_type="evaluation",
+            payload=_evaluation_payload(run, 60.0),
+        )
+    first_payload = _benchmark_payload(first, 12.0)
+    second_payload = _benchmark_payload(second, 13.0)
+    second_payload["hardware"]["host"]["cpu_model"] = "Slower Test CPU"  # type: ignore[index]
+    _record(first, result_type="benchmark", payload=first_payload)
+    _record(second, result_type="benchmark", payload=second_payload)
+    options = {
+        "accuracy_metric": _METRIC,
+        "runtime_scope": "end_to_end_ms",
+        "runtime_statistic": "p95_ms",
+    }
+
+    with pytest.raises(ValueError, match=r"runtime\.host_identity"):
+        compare_runs((first, second), **options)
+    waiver = CompatibilityWaiver(
+        "runtime.host_identity", "reviewed cross-host E2E comparison"
+    )
+    report = compare_runs((first, second), waivers=(waiver,), **options)
+    assert waiver in report.waivers
+
+    unknown = _run(tmp_path, slug="host-unknown", digest_character="3")
+    _record(
+        unknown,
+        result_type="evaluation",
+        payload=_evaluation_payload(unknown, 59.0),
+    )
+    unknown_payload = _benchmark_payload(unknown, 14.0)
+    unknown_payload["hardware"].pop("host")  # type: ignore[union-attr]
+    _record(unknown, result_type="benchmark", payload=unknown_payload, environment=None)
+    with pytest.raises(ValueError, match=r"runtime\.host_identity"):
+        compare_runs((unknown,), **options)
+
+
+def test_prediction_scope_does_not_require_matching_host_cpu(tmp_path: Path) -> None:
+    first = _run(tmp_path, slug="prediction-host-one", digest_character="4")
+    second = _run(tmp_path, slug="prediction-host-two", digest_character="5")
+    for index, run in enumerate((first, second)):
+        _record(
+            run,
+            result_type="evaluation",
+            payload=_evaluation_payload(run, 60.0 + index),
+        )
+        payload = _benchmark_payload(run, 12.0 + index)
+        payload["hardware"]["host"]["cpu_model"] = f"CPU {index}"  # type: ignore[index]
+        _record(run, result_type="benchmark", payload=payload)
+    report = compare_runs(
+        (first, second),
+        accuracy_metric=_METRIC,
+        runtime_scope="prediction_ms",
+        runtime_statistic="p95_ms",
+    )
+    assert len(report.rows) == 2
+
+
 def test_runtime_synchronization_mismatch_is_timing_scope_incompatibility(
     tmp_path: Path,
 ) -> None:
@@ -516,7 +585,7 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         payload=_evaluation_payload(run, 58.0),
     )
     source = {
-        "end_to_end_p95_ms": 19.5,
+        "end_to_end_ms": {"p95_ms": 19.5, "meets_20hz": True},
         "gpu_name": "NVIDIA Test GPU",
         "device_type": "cuda",
         "precision": "fp32",
@@ -527,8 +596,11 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         "persistent_workers": False,
         "drop_last": False,
         "shuffle": False,
-        "warmup": 10,
-        "samples": 100,
+        "warmup_count": 10,
+        "measured_sample_count": 100,
+        "cpu_model": "Test CPU",
+        "architecture": "x86_64",
+        "os_class": "Linux",
     }
     _record(
         run,
