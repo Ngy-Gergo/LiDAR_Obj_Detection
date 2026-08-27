@@ -544,8 +544,14 @@ def build_dataset_identity(
     annotation_files: FileSetIdentity | None,
     class_names: Iterable[str] | None,
     tasks: Mapping[str, Iterable[str]] | None,
+    scheme: str = DATASET_IDENTITY_SCHEME,
 ) -> DatasetIdentity:
     """Build deterministic dataset evidence without hashing bulk sensor data."""
+    if scheme not in {
+        DATASET_IDENTITY_SCHEME,
+        _LEGACY_DATASET_IDENTITY_SCHEME,
+    }:
+        raise ValueError(f"unsupported dataset identity scheme: {scheme!r}")
     if annotation_files is not None and not isinstance(
         annotation_files,
         FileSetIdentity,
@@ -557,7 +563,7 @@ def build_dataset_identity(
     )
     normalized_tasks = _normalize_tasks(tasks)
     payload = _dataset_payload(
-        scheme=DATASET_IDENTITY_SCHEME,
+        scheme=scheme,
         name=name,
         version=version,
         root_reference=root_reference,
@@ -568,7 +574,7 @@ def build_dataset_identity(
         tasks=normalized_tasks,
     )
     return DatasetIdentity(
-        scheme=DATASET_IDENTITY_SCHEME,
+        scheme=scheme,
         identity_sha256=_canonical_hash(_dataset_identity_payload(payload)),
         name=name,
         version=version,

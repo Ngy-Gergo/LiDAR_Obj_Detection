@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import lidar_model_selection.plotting as plotting
 from lidar_model_selection.comparison import (
     KITTI_CAR_AP40_METRICS,
     ComparisonRow,
@@ -13,7 +14,13 @@ from lidar_model_selection.comparison import (
 from lidar_model_selection.plotting import plot_comparison
 
 
-def _row(slug: str, token: str, *, complete: bool = True) -> ComparisonRow:
+def _row(
+    slug: str,
+    token: str,
+    *,
+    complete: bool = True,
+    runtime_scope: str = "end_to_end_ms",
+) -> ComparisonRow:
     ap40 = {
         metric: 50.0 + index
         for index, metric in enumerate(KITTI_CAR_AP40_METRICS)
@@ -34,9 +41,13 @@ def _row(slug: str, token: str, *, complete: bool = True) -> ComparisonRow:
         accuracy_rank=1,
         ap40=ap40,
         benchmark_result_id=(f"benchmark-{slug}" if complete else None),
-        runtime_scope=("end_to_end_ms" if complete else None),
+        runtime_scope=(runtime_scope if complete else None),
         runtime_statistic=("p95_ms" if complete else None),
-        runtime_value=(15.0 if complete else None),
+        runtime_value=(
+            11.0
+            if complete and runtime_scope == "prediction_ms"
+            else (15.0 if complete else None)
+        ),
         runtime_rank=(1 if complete else None),
         latency_statistics=(
             {
@@ -90,6 +101,59 @@ def test_sparse_resolved_evidence_skips_unsupported_plots(tmp_path: Path) -> Non
         (_row("historical", "2", complete=False),), tmp_path / "figures"
     )
     assert tuple(path.name for path in outputs) == ("comparison_table.png",)
+
+
+def test_prediction_scope_never_renders_unvalidated_e2e_or_20hz_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_text: list[str] = []
+    captured_values: dict[str, tuple[float, ...]] = {}
+
+    def capture(figure: object, output: Path) -> Path:
+        axis = figure.axes[0]  # type: ignore[attr-defined]
+        captured_text.extend(
+            (axis.get_title(), axis.get_xlabel(), axis.get_ylabel())
+        )
+        for table in axis.tables:
+            captured_text.extend(
+                cell.get_text().get_text()
+                for cell in table.get_celld().values()
+            )
+        if output.name == "latency_percentiles.png":
+            captured_values[output.name] = tuple(
+                patch.get_height() for patch in axis.patches
+            )
+        elif output.name == "accuracy_vs_latency.png":
+            captured_values[output.name] = tuple(
+                float(value)
+                for value in axis.collections[0].get_offsets()[0]
+            )
+        plotting._pyplot().close(figure)
+        return output
+
+    monkeypatch.setattr(plotting, "_finish", capture)
+    outputs = plot_comparison(
+        (_row("prediction", "3", runtime_scope="prediction_ms"),),
+        tmp_path / "figures",
+    )
+
+    assert {path.name for path in outputs} == {
+        "accuracy_3d_ap40.png",
+        "accuracy_bev_ap40.png",
+        "latency_percentiles.png",
+        "accuracy_vs_latency.png",
+        "peak_gpu_memory.png",
+        "checkpoint_size.png",
+        "comparison_table.png",
+    }
+    rendered = " ".join(captured_text).casefold()
+    assert "prediction" in rendered
+    assert "end-to-end" not in rendered
+    assert "e2e" not in rendered
+    assert "20 hz" not in rendered
+    assert captured_values["latency_percentiles.png"] == (10.0, 11.0, 12.0)
+    assert captured_values["accuracy_vs_latency.png"][0] == 11.0
 
 
 def test_plotting_rejects_unresolved_or_empty_inputs(tmp_path: Path) -> None:

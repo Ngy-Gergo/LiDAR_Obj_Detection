@@ -215,7 +215,7 @@ def _benchmark_payload(
             "model_parameter_dtypes": ["torch.float32"],
         },
         "prediction_ms": {"p95_ms": float(latency) / 2.0},
-        "end_to_end_ms": {"p95_ms": latency},
+        "end_to_end_ms": {"p95_ms": latency, "meets_20hz": True},
         "checkpoint": {"size_bytes": 128, "size_mib": 0.0001},
         "peak_memory": {"allocated_bytes": 1024, "reserved_bytes": 2048},
     }
@@ -307,6 +307,20 @@ def test_exact_raw_projection_ranking_round_trip_and_durable_output(
     assert by_run[second.run_id].accuracy_rank == 1
     assert by_run[first.run_id].runtime_rank == 1
     assert by_run[second.run_id].runtime_rank == 2
+    assert dict(by_run[first.run_id].ap40) == {_METRIC: 61.0}
+    latency_statistics = by_run[first.run_id].latency_statistics
+    assert latency_statistics is not None
+    assert {
+        scope: dict(values)
+        for scope, values in latency_statistics.items()
+    } == {
+        "prediction_ms": {"p95_ms": 7.5},
+        "end_to_end_ms": {"p95_ms": 15.0},
+    }
+    assert by_run[first.run_id].peak_memory_allocated_bytes == 1024
+    assert by_run[first.run_id].peak_memory_reserved_bytes == 2048
+    assert by_run[first.run_id].checkpoint_size_bytes == 128
+    assert by_run[first.run_id].meets_20hz is True
     assert ComparisonReport.from_dict(report.to_dict()) == report
 
     output = tmp_path / "derived" / "comparison.json"
@@ -352,6 +366,31 @@ def test_selection_uses_sole_success_or_requires_an_exact_result_id(
     )
     assert explicit.rows[0].accuracy_value == 55.0
     assert explicit.rows[0].evaluation_result_id != newer.result_id
+
+
+def test_row_rejects_disagreement_between_ranking_and_plot_evidence(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, slug="consistent", digest_character="d")
+    _publish_pair(run, score=61.0, latency=15.0)
+    report = compare_runs(
+        (run,),
+        accuracy_metric=_METRIC,
+        runtime_scope="end_to_end_ms",
+        runtime_statistic="p95_ms",
+    )
+
+    document = report.to_dict()
+    document["rows"][0]["accuracy_value"] = 62.0  # type: ignore[index]
+    with pytest.raises(ValueError, match="selected accuracy disagrees"):
+        ComparisonReport.from_dict(document)
+
+    document = report.to_dict()
+    document["rows"][0]["latency_statistics"]["end_to_end_ms"][  # type: ignore[index]
+        "p95_ms"
+    ] = 16.0
+    with pytest.raises(ValueError, match="selected runtime disagrees"):
+        ComparisonReport.from_dict(document)
 
 
 def test_unknown_metadata_requires_the_exact_field_waiver(tmp_path: Path) -> None:
@@ -575,8 +614,10 @@ def test_historical_source_projection_never_makes_unknown_profile_match(
     assert report.rows[0].accuracy_value == 52.5
 
 
+@pytest.mark.parametrize("nested_shape", [False, True])
 def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
     tmp_path: Path,
+    nested_shape: bool,
 ) -> None:
     run = _run(tmp_path, slug="historical-runtime", digest_character="6")
     _record(
@@ -585,7 +626,11 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         payload=_evaluation_payload(run, 58.0),
     )
     source = {
-        "end_to_end_ms": {"p95_ms": 19.5, "meets_20hz": True},
+        **(
+            {"end_to_end_ms": {"p95_ms": 19.5, "meets_20hz": True}}
+            if nested_shape
+            else {"end_to_end_p95_ms": 19.5, "meets_20hz": True}
+        ),
         "gpu_name": "NVIDIA Test GPU",
         "device_type": "cuda",
         "precision": "fp32",
@@ -596,11 +641,17 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         "persistent_workers": False,
         "drop_last": False,
         "shuffle": False,
-        "warmup_count": 10,
-        "measured_sample_count": 100,
+        **(
+            {"warmup_count": 10, "measured_sample_count": 100}
+            if nested_shape
+            else {"warmup": 10, "samples": 100}
+        ),
         "cpu_model": "Test CPU",
         "architecture": "x86_64",
         "os_class": "Linux",
+        "peak_memory_allocated_mb": 1.5,
+        "peak_memory_reserved_mb": 2.5,
+        "checkpoint_size_mb": 3.5,
     }
     _record(
         run,
@@ -635,7 +686,15 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         ),
         **options,
     )
-    assert report.rows[0].runtime_value == 19.5
+    row = report.rows[0]
+    assert row.runtime_value == 19.5
+    assert dict(row.latency_statistics["end_to_end_ms"]) == {  # type: ignore[index]
+        "p95_ms": 19.5
+    }
+    assert row.peak_memory_allocated_bytes == round(1.5 * 1024**2)
+    assert row.peak_memory_reserved_bytes == round(2.5 * 1024**2)
+    assert row.checkpoint_size_bytes == round(3.5 * 1024**2)
+    assert row.meets_20hz is True
     assert {waiver.field for waiver in report.waivers} == set(waived_fields)
 
 

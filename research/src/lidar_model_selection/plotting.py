@@ -25,6 +25,19 @@ _BEV = (
     "car_bev_ap40_hard_strict",
 )
 _PERCENTILES = ("p50_ms", "p95_ms", "p99_ms")
+_SCOPE_LABELS = {
+    "prediction_ms": "prediction",
+    "end_to_end_ms": "end-to-end",
+}
+_STATISTIC_LABELS = {
+    "mean_ms": "mean",
+    "min_ms": "minimum",
+    "max_ms": "maximum",
+    "p50_ms": "p50",
+    "p95_ms": "p95",
+    "p99_ms": "p99",
+    "standard_deviation_ms": "standard deviation",
+}
 
 
 def _pyplot() -> Any:
@@ -113,77 +126,98 @@ def _simple_bars(
 
 
 def _accuracy_latency(
-    pyplot: Any, rows: Sequence[ComparisonRow], output: Path
+    pyplot: Any,
+    rows: Sequence[ComparisonRow],
+    output: Path,
+    *,
+    scope: str | None,
+    statistic: str | None,
 ) -> Path | None:
-    metric = "car_3d_ap40_moderate_strict"
+    if scope is None or statistic is None:
+        return None
+    metric = rows[0].accuracy_metric
     eligible = [
         row
         for row in rows
-        if metric in row.ap40
-        and row.latency_statistics is not None
-        and "p95_ms" in row.latency_statistics.get("end_to_end_ms", {})
+        if metric in row.ap40 and row.runtime_value is not None
     ]
     if not eligible:
         return None
-    latency = [row.latency_statistics["end_to_end_ms"]["p95_ms"] for row in eligible]  # type: ignore[index]
+    latency = [row.runtime_value for row in eligible]
     accuracy = [row.ap40[metric] for row in eligible]
     figure, axis = pyplot.subplots(figsize=(9.0, 6.0))
     axis.scatter(latency, accuracy, s=55)
     for row, x_value, y_value in zip(eligible, latency, accuracy):
         axis.annotate(row.slug, (x_value, y_value), xytext=(6, 6), textcoords="offset points")
-    axis.axvline(50.0, linestyle="--", linewidth=1.4, label="20 Hz (50 ms)")
-    axis.set_title("CenterPoint accuracy versus end-to-end latency")
-    axis.set_xlabel("End-to-end p95 latency (ms)")
-    axis.set_ylabel("Car 3D AP40 Moderate strict")
+    if scope == "end_to_end_ms":
+        axis.axvline(50.0, linestyle="--", linewidth=1.4, label="20 Hz (50 ms)")
+    scope_label = _SCOPE_LABELS[scope]
+    statistic_label = _STATISTIC_LABELS[statistic]
+    axis.set_title(f"CenterPoint accuracy versus {scope_label} latency")
+    axis.set_xlabel(f"{scope_label.title()} {statistic_label} latency (ms)")
+    axis.set_ylabel(metric.replace("_", " "))
     axis.set_xlim(left=0.0)
     axis.set_ylim(0.0, 100.0)
     axis.grid(alpha=0.25)
-    axis.legend()
+    if scope == "end_to_end_ms":
+        axis.legend()
     return _finish(figure, output)
 
 
 def _comparison_table(
-    pyplot: Any, rows: Sequence[ComparisonRow], output: Path
+    pyplot: Any,
+    rows: Sequence[ComparisonRow],
+    output: Path,
+    *,
+    scope: str | None,
+    statistic: str | None,
 ) -> Path:
-    headers = (
+    runtime_header = (
+        "Runtime"
+        if scope is None or statistic is None
+        else f"{_SCOPE_LABELS[scope].title()} {_STATISTIC_LABELS[statistic]} (ms)"
+    )
+    headers = [
         "Run",
         "3D AP40 mod.",
         "BEV AP40 mod.",
-        "E2E p95 (ms)",
+        runtime_header,
         "Peak CUDA (MiB)",
         "Checkpoint (MiB)",
-        "20 Hz",
-    )
+    ]
+    if scope == "end_to_end_ms":
+        headers.append("20 Hz")
 
     def number(value: float | None, decimals: int = 2) -> str:
         return "N/A" if value is None else f"{value:.{decimals}f}"
 
     cells = []
     for row in rows:
-        latency = None
-        if row.latency_statistics is not None:
-            latency = row.latency_statistics.get("end_to_end_ms", {}).get("p95_ms")
-        cells.append(
-            (
-                row.slug,
-                number(row.ap40.get("car_3d_ap40_moderate_strict")),
-                number(row.ap40.get("car_bev_ap40_moderate_strict")),
-                number(latency),
-                number(
-                    None
-                    if row.peak_memory_allocated_bytes is None
-                    else row.peak_memory_allocated_bytes / 1024**2,
-                    1,
-                ),
-                number(
-                    None
-                    if row.checkpoint_size_bytes is None
-                    else row.checkpoint_size_bytes / 1024**2,
-                    1,
-                ),
-                "N/A" if row.meets_20hz is None else ("Yes" if row.meets_20hz else "No"),
+        values = [
+            row.slug,
+            number(row.ap40.get("car_3d_ap40_moderate_strict")),
+            number(row.ap40.get("car_bev_ap40_moderate_strict")),
+            number(row.runtime_value),
+            number(
+                None
+                if row.peak_memory_allocated_bytes is None
+                else row.peak_memory_allocated_bytes / 1024**2,
+                1,
+            ),
+            number(
+                None
+                if row.checkpoint_size_bytes is None
+                else row.checkpoint_size_bytes / 1024**2,
+                1,
+            ),
+        ]
+        if scope == "end_to_end_ms":
+            values.append(
+                "N/A"
+                if row.meets_20hz is None
+                else ("Yes" if row.meets_20hz else "No")
             )
-        )
+        cells.append(values)
     figure, axis = pyplot.subplots(figsize=(15.0, max(3.0, 0.55 * len(rows) + 2.0)))
     axis.axis("off")
     table = axis.table(cellText=cells, colLabels=headers, cellLoc="center", loc="center")
@@ -204,6 +238,10 @@ def plot_comparison(
         raise ValueError("rows must contain at least one ComparisonRow")
     if not isinstance(output_dir, Path):
         raise TypeError("output_dir must be a pathlib.Path")
+    selections = {(row.runtime_scope, row.runtime_statistic) for row in rows}
+    if len(selections) != 1:
+        raise ValueError("rows must share one resolved runtime selection")
+    runtime_scope, runtime_statistic = next(iter(selections))
     pyplot = _pyplot()
     rendered: list[Path | None] = [
         _grouped_bars(
@@ -226,22 +264,35 @@ def plot_comparison(
             output=output_dir / "accuracy_bev_ap40.png",
             value=lambda row, field: row.ap40.get(field),
         ),
-        _grouped_bars(
+        (
+            None
+            if runtime_scope is None
+            else _grouped_bars(
+                pyplot,
+                rows,
+                _PERCENTILES,
+                ("p50", "p95", "p99"),
+                title=(
+                    f"CenterPoint {_SCOPE_LABELS[runtime_scope]} "
+                    "latency percentiles"
+                ),
+                ylabel="Latency (ms)",
+                output=output_dir / "latency_percentiles.png",
+                value=lambda row, field: (
+                    None
+                    if row.latency_statistics is None
+                    else row.latency_statistics.get(runtime_scope, {}).get(field)
+                ),
+                threshold=(50.0 if runtime_scope == "end_to_end_ms" else None),
+            )
+        ),
+        _accuracy_latency(
             pyplot,
             rows,
-            _PERCENTILES,
-            ("p50", "p95", "p99"),
-            title="CenterPoint end-to-end latency percentiles",
-            ylabel="Latency (ms)",
-            output=output_dir / "latency_percentiles.png",
-            value=lambda row, field: (
-                None
-                if row.latency_statistics is None
-                else row.latency_statistics.get("end_to_end_ms", {}).get(field)
-            ),
-            threshold=50.0,
+            output_dir / "accuracy_vs_latency.png",
+            scope=runtime_scope,
+            statistic=runtime_statistic,
         ),
-        _accuracy_latency(pyplot, rows, output_dir / "accuracy_vs_latency.png"),
         _simple_bars(
             pyplot,
             rows,
@@ -266,6 +317,12 @@ def plot_comparison(
             ylabel="Checkpoint size (MiB)",
             output=output_dir / "checkpoint_size.png",
         ),
-        _comparison_table(pyplot, rows, output_dir / "comparison_table.png"),
+        _comparison_table(
+            pyplot,
+            rows,
+            output_dir / "comparison_table.png",
+            scope=runtime_scope,
+            statistic=runtime_statistic,
+        ),
     ]
     return tuple(path for path in rendered if path is not None)

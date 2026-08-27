@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,19 +16,25 @@ from lidar_model_selection.pipeline import (
 from lidar_model_selection.preflight import PreflightReport
 
 
-def _run(tmp_path: Path) -> SimpleNamespace:
-    root = tmp_path / "runs" / "one"
+def _run(tmp_path: Path, slug: str = "explicit") -> SimpleNamespace:
+    root = tmp_path / "runs" / slug
     root.mkdir(parents=True)
     return SimpleNamespace(
-        run_id="20260824T120000Z-explicit-" + "a" * 24,
+        run_id=f"20260824T120000Z-{slug}-" + "a" * 24,
         paths=SimpleNamespace(root=root),
     )
 
 
 def _install_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, slug: str
 ) -> tuple[SimpleNamespace, list[object]]:
-    run = _run(tmp_path)
+    run = _run(tmp_path, slug)
+    completed = SimpleNamespace(
+        run_id=run.run_id,
+        paths=run.paths,
+        completed=True,
+    )
+    run.completed = completed
     calls: list[object] = []
 
     def create(slug: str, epoch: int, *, source_config: Path | None):
@@ -48,30 +55,31 @@ def _install_success(
             sample_checked=kwargs["sample_check"],
         ),
     )
-    monkeypatch.setattr(
-        pipeline,
-        "execute_training",
-        lambda supplied: calls.append("train") or run,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "evaluate_run",
-        lambda supplied: calls.append("evaluate")
-        or SimpleNamespace(status="succeeded", result_id="evaluation-id"),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "benchmark_run",
-        lambda supplied, **kwargs: calls.append(("benchmark", kwargs))
-        or SimpleNamespace(status="succeeded", result_id="benchmark-id"),
-    )
+    def train(supplied: object):
+        assert supplied is run
+        calls.append("train")
+        return completed
+
+    def evaluate(supplied: object):
+        assert supplied is completed
+        calls.append("evaluate")
+        return SimpleNamespace(status="succeeded", result_id="evaluation-id")
+
+    def benchmark(supplied: object, **kwargs: object):
+        assert supplied is completed
+        calls.append(("benchmark", kwargs))
+        return SimpleNamespace(status="succeeded", result_id="benchmark-id")
+
+    monkeypatch.setattr(pipeline, "execute_training", train)
+    monkeypatch.setattr(pipeline, "evaluate_run", evaluate)
+    monkeypatch.setattr(pipeline, "benchmark_run", benchmark)
     return run, calls
 
 
 def test_pipeline_explicit_config_reuses_public_operations_and_pins_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, calls = _install_success(tmp_path, monkeypatch)
+    run, calls = _install_success(tmp_path, monkeypatch, slug="loss-ablation")
     source = tmp_path / "ablation.py"
     request = PipelineRequest(
         slug="loss-ablation",
@@ -83,7 +91,7 @@ def test_pipeline_explicit_config_reuses_public_operations_and_pins_results(
     )
 
     completed, record = run_pipeline(request)
-    assert completed is run
+    assert completed is run.completed
     assert calls == [
         ("create", "loss-ablation", 4, source),
         ("preflight", {"operation": "pipeline", "sample_check": False}),
@@ -100,7 +108,7 @@ def test_pipeline_explicit_config_reuses_public_operations_and_pins_results(
 def test_failed_evaluation_is_persisted_and_benchmark_is_not_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, calls = _install_success(tmp_path, monkeypatch)
+    run, calls = _install_success(tmp_path, monkeypatch, slug="pillar02")
     monkeypatch.setattr(
         pipeline,
         "evaluate_run",
@@ -119,6 +127,23 @@ def test_failed_evaluation_is_persisted_and_benchmark_is_not_run(
     assert not any(
         isinstance(call, tuple) and call[0] == "benchmark" for call in calls
     )
+
+
+def test_pipeline_record_strictly_validates_identity_fields_and_time_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _ = _install_success(tmp_path, monkeypatch, slug="pillar02")
+    _, record = run_pipeline(PipelineRequest(slug="pillar02", target_epoch=2))
+    with pytest.raises(ValueError, match="schema version"):
+        replace(record, schema_version=True)
+    with pytest.raises(ValueError, match="evaluation result ID"):
+        replace(record, evaluation_result_id=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="precedes"):
+        replace(
+            record,
+            started_at="2026-08-24T12:00:00.900000Z",
+            finished_at="2026-08-24T12:00:00.100000Z",
+        )
 
 
 def test_run_cli_builds_explicit_config_request_without_execution_logic(

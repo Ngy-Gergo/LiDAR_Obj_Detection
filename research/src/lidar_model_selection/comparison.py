@@ -301,6 +301,8 @@ class ComparisonRow:
                 }
             ),
         )
+        if self.ap40[self.accuracy_metric] != self.accuracy_value:
+            raise ValueError("row selected accuracy disagrees with AP40 evidence")
 
         runtime_values = (
             self.benchmark_result_id,
@@ -339,6 +341,8 @@ class ComparisonRow:
             "runtime_value",
             _finite_number(self.runtime_value, description="row runtime value"),
         )
+        if self.runtime_value < 0.0:
+            raise ValueError("row runtime value must be non-negative")
         _require_positive_integer(self.runtime_rank, description="runtime rank")
         statistics = _require_mapping(
             self.latency_statistics, description="row latency statistics"
@@ -352,18 +356,29 @@ class ComparisonRow:
             )
             if not scope_values or not set(scope_values).issubset(RUNTIME_STATISTICS):
                 raise ValueError(f"row {scope} contains invalid statistics")
-            normalized_statistics[scope] = MappingProxyType(
-                {
-                    statistic: _finite_number(
-                        scope_values[statistic],
-                        description=f"row {scope} {statistic}",
+            normalized_scope: dict[str, float] = {}
+            for statistic in scope_values:
+                number = _finite_number(
+                    scope_values[statistic],
+                    description=f"row {scope} {statistic}",
+                )
+                if number < 0.0:
+                    raise ValueError(
+                        f"row {scope} {statistic} must be non-negative"
                     )
-                    for statistic in scope_values
-                }
-            )
+                normalized_scope[statistic] = number
+            normalized_statistics[scope] = MappingProxyType(normalized_scope)
         object.__setattr__(
             self, "latency_statistics", MappingProxyType(normalized_statistics)
         )
+        selected_statistics = self.latency_statistics.get(self.runtime_scope, {})
+        if (
+            self.runtime_statistic not in selected_statistics
+            or selected_statistics[self.runtime_statistic] != self.runtime_value
+        ):
+            raise ValueError(
+                "row selected runtime disagrees with latency-statistics evidence"
+            )
         for value, description in (
             (self.peak_memory_allocated_bytes, "allocated peak memory"),
             (self.peak_memory_reserved_bytes, "reserved peak memory"),

@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .runs import Run, load_run, validate_run_id
+from .provenance import identify_file_set
+from .runs import (
+    DATASET_IDENTITY_SCHEME,
+    Run,
+    build_dataset_identity,
+    load_run,
+    validate_run_id,
+)
 
 __all__ = ("PreflightReport", "preflight_run")
 
@@ -24,7 +31,12 @@ def _value(container: object, key: str, default: object = None) -> Any:
 
 
 def _loaded(run: Run | Path | str) -> Run:
-    return run if isinstance(run, Run) else load_run(run)
+    if not isinstance(run, Run):
+        return load_run(run)
+    current = load_run(run.paths.root)
+    if current.manifest != run.manifest:
+        raise ValueError(f"loaded run is stale: {run.run_id}")
+    return current
 
 
 def _regular_contained(root: Path, relative: str, *, description: str) -> Path:
@@ -142,8 +154,37 @@ def preflight_run(
     recorded = Path(recorded_root)
     if not recorded.is_absolute():
         recorded = repository / recorded
-    if recorded.resolve(strict=True) != roots[0]:
-        raise ValueError("configured dataset root differs from run evidence")
+    recorded_location = recorded.resolve(strict=False)
+    if recorded_location != roots[0]:
+        recorded_dataset = loaded.manifest.dataset
+        if recorded_dataset.scheme != DATASET_IDENTITY_SCHEME:
+            raise ValueError("configured dataset root differs from run evidence")
+        recorded_annotations = recorded_dataset.annotation_files
+        if recorded_annotations is None:
+            raise ValueError(
+                "relocated dataset lacks annotation identity evidence"
+            )
+        current_annotations = identify_file_set(
+            roots[0],
+            (item.path for item in recorded_annotations.files),
+        )
+        observed_dataset = build_dataset_identity(
+            name=recorded_dataset.name,
+            version=recorded_dataset.version,
+            root_reference=os.fspath(roots[0]),
+            semantic_partition=recorded_dataset.semantic_partition,
+            framework_key=recorded_dataset.framework_key,
+            annotation_files=current_annotations,
+            class_names=recorded_dataset.class_names,
+            tasks=(
+                None
+                if recorded_dataset.tasks is None
+                else dict(recorded_dataset.tasks)
+            ),
+            scheme=recorded_dataset.scheme,
+        )
+        if observed_dataset.identity_sha256 != recorded_dataset.identity_sha256:
+            raise ValueError("configured dataset identity differs from run evidence")
 
     checked = False
     if sample_check:

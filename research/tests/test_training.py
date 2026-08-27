@@ -950,6 +950,7 @@ def test_current_compatibility_uses_explicit_repository_root(
         core_packages=(("torch", "2"),),
     )
     dataset = SimpleNamespace(
+        scheme="lidar-dataset-v1",
         root_reference=str(tmp_path),
         identity_sha256="b" * 64,
     )
@@ -962,8 +963,16 @@ def test_current_compatibility_uses_explicit_repository_root(
         paths=SimpleNamespace(config=tmp_path / "config.py"),
     )
     observed_roots: list[Path] = []
+    observed_dataset_options: list[tuple[object, object]] = []
     monkeypatch.setattr(training, "_load_config", lambda path: {})
-    monkeypatch.setattr(training, "_dataset_identity", lambda *a, **k: dataset)
+
+    def observe_dataset(*args: object, **kwargs: object):
+        observed_dataset_options.append(
+            (kwargs.get("recorded_root"), kwargs.get("scheme"))
+        )
+        return dataset
+
+    monkeypatch.setattr(training, "_dataset_identity", observe_dataset)
 
     def identify(root: Path, paths: object):
         observed_roots.append(root)
@@ -978,3 +987,133 @@ def test_current_compatibility_uses_explicit_repository_root(
 
     training._verify_current_compatibility(run, tmp_path)
     assert observed_roots == [tmp_path]
+    assert observed_dataset_options == [(str(tmp_path), "lidar-dataset-v1")]
+
+
+def test_current_v2_compatibility_uses_portable_semantic_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded_sources = SimpleNamespace(
+        files=(SimpleNamespace(path="research/source.py"),)
+    )
+    recorded = SimpleNamespace(
+        training_sources=recorded_sources,
+        core_packages=(("torch", "2"),),
+    )
+    dataset = SimpleNamespace(
+        scheme="lidar-dataset-v2",
+        root_reference="/machine-a/KITTI",
+        identity_sha256="b" * 64,
+    )
+    run = SimpleNamespace(
+        manifest=SimpleNamespace(
+            training_compatibility=recorded,
+            dataset=dataset,
+            config=SimpleNamespace(sha256="a" * 64),
+        ),
+        paths=SimpleNamespace(config=tmp_path / "config.py"),
+    )
+    observed_options: list[tuple[object, object]] = []
+    monkeypatch.setattr(training, "_load_config", lambda path: {})
+
+    def observe_dataset(*args: object, **kwargs: object):
+        observed_options.append(
+            (kwargs.get("recorded_root"), kwargs.get("scheme"))
+        )
+        return SimpleNamespace(identity_sha256=dataset.identity_sha256)
+
+    monkeypatch.setattr(training, "_dataset_identity", observe_dataset)
+    monkeypatch.setattr(
+        training,
+        "identify_file_set",
+        lambda root, paths: recorded_sources,
+    )
+    monkeypatch.setattr(
+        training,
+        "build_training_compatibility",
+        lambda *args, **kwargs: recorded,
+    )
+
+    training._verify_current_compatibility(run, tmp_path)
+    assert observed_options == [(None, "lidar-dataset-v2")]
+
+    monkeypatch.setattr(
+        training,
+        "_dataset_identity",
+        lambda *args, **kwargs: SimpleNamespace(identity_sha256="c" * 64),
+    )
+    with pytest.raises(ValueError, match="dataset annotation identity changed"):
+        training._verify_current_compatibility(run, tmp_path)
+
+
+def test_parent_dataset_compatibility_preserves_v1_and_v2_identity_meaning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = {
+        "name": "KITTI",
+        "version": "object-v1",
+        "semantic_partition": "KITTI validation",
+        "framework_key": "test_dataloader",
+        "annotation_files": None,
+        "class_names": ("Car",),
+        "tasks": {"3d_detection": ("Car",)},
+    }
+    parent_dataset = build_dataset_identity(
+        **common,
+        root_reference="/machine-a/KITTI",
+        scheme="lidar-dataset-v1",
+    )
+    child_dataset = build_dataset_identity(
+        **common,
+        root_reference="/machine-a/KITTI",
+    )
+    sources = SimpleNamespace(identity_sha256="c" * 64)
+    previous = SimpleNamespace(
+        dataset_sha256=parent_dataset.identity_sha256,
+        training_sources=sources,
+        python_version="3.10.20",
+        core_packages=(("torch", "2.1.2"),),
+    )
+    current = SimpleNamespace(
+        dataset_sha256=child_dataset.identity_sha256,
+        training_sources=sources,
+        python_version=previous.python_version,
+        core_packages=previous.core_packages,
+    )
+    loaded = SimpleNamespace(
+        manifest=SimpleNamespace(
+            training=SimpleNamespace(status="completed"),
+            training_compatibility=previous,
+            dataset=parent_dataset,
+        ),
+        selected_checkpoint=object(),
+        paths=SimpleNamespace(root=tmp_path / "parent"),
+    )
+    parent = SimpleNamespace(paths=loaded.paths)
+    monkeypatch.setattr(training, "load_run", lambda path: loaded)
+    monkeypatch.setattr(training, "verify_checkpoint", lambda *a, **k: ())
+
+    training._require_parent_compatible(parent, current, child_dataset)
+
+    relocated_child = build_dataset_identity(
+        **common,
+        root_reference="/machine-b/KITTI",
+    )
+    relocated = SimpleNamespace(
+        dataset_sha256=relocated_child.identity_sha256,
+        training_sources=sources,
+        python_version=previous.python_version,
+        core_packages=previous.core_packages,
+    )
+    with pytest.raises(ValueError, match="incompatible in dataset"):
+        training._require_parent_compatible(parent, relocated, relocated_child)
+
+    portable_parent = build_dataset_identity(
+        **common,
+        root_reference="/machine-a/KITTI",
+    )
+    previous.dataset_sha256 = portable_parent.identity_sha256
+    loaded.manifest.dataset = portable_parent
+    training._require_parent_compatible(parent, relocated, relocated_child)

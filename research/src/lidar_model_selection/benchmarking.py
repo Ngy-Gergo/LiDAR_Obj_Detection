@@ -221,8 +221,10 @@ def _cleanup_cuda() -> None:
 
 def _host_identity() -> dict[str, str]:
     """Capture only stable host evidence material to E2E timing."""
-    cpu_model = platform.processor().strip()
-    if not cpu_model:
+    os_class = platform.system().strip()
+    architecture = " ".join(platform.machine().split())
+    cpu_model = ""
+    if os_class.casefold() == "linux":
         try:
             for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
                 if line.lower().startswith("model name"):
@@ -230,10 +232,23 @@ def _host_identity() -> dict[str, str]:
                     break
         except OSError:
             pass
+    if not cpu_model:
+        processor = " ".join(platform.processor().split())
+        generic_processors = {
+            "",
+            architecture.casefold(),
+            "x86_64",
+            "amd64",
+            "x64",
+            "aarch64",
+            "arm64",
+        }
+        if processor.casefold() not in generic_processors:
+            cpu_model = processor
     return {
         "cpu_model": " ".join(cpu_model.split()),
-        "architecture": platform.machine().strip(),
-        "os_class": platform.system().strip(),
+        "architecture": architecture,
+        "os_class": os_class,
     }
 
 

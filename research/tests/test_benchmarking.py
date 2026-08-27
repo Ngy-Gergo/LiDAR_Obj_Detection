@@ -333,6 +333,45 @@ def test_threshold_evidence_uses_end_to_end_p95_and_strictly_over_50ms() -> None
     assert end_to_end["meets_20hz"] is False  # type: ignore[index]
 
 
+def test_host_identity_prefers_detailed_linux_cpu_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(benchmarking.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(benchmarking.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(benchmarking.platform, "processor", lambda: "x86_64")
+    monkeypatch.setattr(
+        benchmarking.Path,
+        "read_text",
+        lambda path, **kwargs: (
+            "processor: 0\n"
+            "model name: Intel(R)   Core(TM) i9-7940X CPU @ 3.10GHz\n"
+        ),
+    )
+
+    assert benchmarking._host_identity() == {
+        "cpu_model": "Intel(R) Core(TM) i9-7940X CPU @ 3.10GHz",
+        "architecture": "x86_64",
+        "os_class": "Linux",
+    }
+
+
+@pytest.mark.parametrize("processor", [" x86_64 ", "AMD64"])
+def test_host_identity_does_not_treat_architecture_as_a_cpu_model(
+    monkeypatch: pytest.MonkeyPatch,
+    processor: str,
+) -> None:
+    monkeypatch.setattr(benchmarking.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(benchmarking.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(benchmarking.platform, "processor", lambda: processor)
+
+    def unavailable(path: Path, **kwargs: object) -> str:
+        raise OSError("cpuinfo unavailable")
+
+    monkeypatch.setattr(benchmarking.Path, "read_text", unavailable)
+
+    assert benchmarking._host_identity()["cpu_model"] == ""
+
+
 def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

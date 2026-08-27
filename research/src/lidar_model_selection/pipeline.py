@@ -44,15 +44,16 @@ def _text(value: object, *, description: str) -> str:
     return value
 
 
-def _utc(value: object, *, description: str) -> str:
+def _utc(value: object, *, description: str) -> datetime:
     text = _text(value, description=description)
     if not text.endswith("Z"):
         raise ValueError(f"{description} must be a UTC timestamp")
     try:
-        datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ")
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+            tzinfo=timezone.utc
+        )
     except ValueError as error:
         raise ValueError(f"{description} must be a UTC timestamp") from error
-    return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,18 +104,35 @@ class PipelineRecord:
     failure: str | None
 
     def __post_init__(self) -> None:
-        if self.schema_version != PIPELINE_SCHEMA_VERSION:
+        if (
+            isinstance(self.schema_version, bool)
+            or self.schema_version != PIPELINE_SCHEMA_VERSION
+        ):
             raise ValueError("unsupported pipeline schema version")
         _text(self.pipeline_id, description="pipeline ID")
         validate_run_id(self.run_id)
         if not isinstance(self.request, PipelineRequest):
             raise TypeError("pipeline request must be a PipelineRequest")
+        run_slug = self.run_id[17:].rsplit("-", 1)[0]
+        if self.request.slug != run_slug:
+            raise ValueError("pipeline request slug does not match run ID")
         started = _utc(self.started_at, description="pipeline started_at")
         finished = _utc(self.finished_at, description="pipeline finished_at")
         if finished < started:
             raise ValueError("pipeline finished_at precedes started_at")
-        if self.preflight is not None and self.preflight.run_id != self.run_id:
-            raise ValueError("pipeline preflight belongs to a different run")
+        if self.preflight is not None:
+            if not isinstance(self.preflight, PreflightReport):
+                raise TypeError("pipeline preflight must be a PreflightReport or None")
+            if self.preflight.run_id != self.run_id:
+                raise ValueError("pipeline preflight belongs to a different run")
+        for result_id, description in (
+            (self.evaluation_result_id, "evaluation result ID"),
+            (self.benchmark_result_id, "benchmark result ID"),
+        ):
+            if result_id is not None:
+                _text(result_id, description=description)
+        if self.failure is not None:
+            _text(self.failure, description="pipeline failure")
         if self.status not in {"succeeded", "failed"}:
             raise ValueError("pipeline status must be succeeded or failed")
         if self.status == "succeeded" and (

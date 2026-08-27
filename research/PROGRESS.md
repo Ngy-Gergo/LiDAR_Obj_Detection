@@ -14,9 +14,11 @@ continuation did not revert to or reconstruct the legacy `main` architecture.
   only resolved rows, with a thin `tools/plot.py`. Dataset scheme
   `lidar-dataset-v2` excludes observed machine paths from semantic identity
   while preserving `root_reference`; v1 records retain their old path-bound
-  meaning. E2E comparisons include CPU model, architecture, and OS class;
-  unknown/mismatched host evidence requires a persisted waiver. Prediction-only
-  timing does not require host matching.
+  meaning through resume, lineage, and relocated-data checks. E2E comparisons
+  include a normalized CPU model, architecture, and OS class; architecture-only
+  CPU evidence remains unknown, and unknown/mismatched host evidence requires a
+  persisted waiver. Prediction-only timing does not require host matching, and
+  plotting renders only the selected timing scope.
 - **M6 — complete for available evidence.** Exact effective configs, literal
   epoch-20 checkpoints, selected-best checkpoints, evaluation JSON, benchmark
   JSON, and KITTI info files were present for all six historical models. Six
@@ -53,7 +55,7 @@ PYTHONPATH=research/src:runtime \
   -m pytest -p no:cacheprovider research/tests runtime/test -q
 ```
 
-Result: **360 passed, 0 failed, 0 skipped** in 14.76 seconds.
+Result: **373 passed, 0 failed, 0 skipped** in 14.66 seconds.
 
 Also passed:
 

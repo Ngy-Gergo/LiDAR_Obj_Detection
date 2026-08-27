@@ -27,12 +27,15 @@ from .checkpoints import (
     verify_checkpoint,
 )
 from .provenance import (
+    TrainingCompatibilityIdentity,
     build_training_compatibility,
     capture_code_provenance,
     capture_environment,
     identify_file_set,
 )
 from .runs import (
+    DATASET_IDENTITY_SCHEME,
+    DatasetIdentity,
     Run,
     RunPaths,
     TrainingAttempt,
@@ -220,7 +223,8 @@ def _dataset_identity(
     repository_root: Path,
     *,
     recorded_root: str | None = None,
-) -> object:
+    scheme: str = DATASET_IDENTITY_SCHEME,
+) -> DatasetIdentity:
     train = _dataset_config(config, "train_dataloader")
     validation = _dataset_config(config, "val_dataloader")
     test = _dataset_config(config, "test_dataloader")
@@ -306,6 +310,7 @@ def _dataset_identity(
         annotation_files=annotation_files,
         class_names=("Car",),
         tasks={"3d_object_detection_7d": ("Car",)},
+        scheme=scheme,
     )
 
 
@@ -330,8 +335,8 @@ def _validate_snapshot(config: object, paths: RunPaths, target_epoch: int) -> No
 
 def _require_parent_compatible(
     parent: Run,
-    compatibility: object,
-    dataset: object,
+    compatibility: TrainingCompatibilityIdentity,
+    dataset: DatasetIdentity,
 ) -> None:
     loaded = load_run(parent.paths.root)
     if (
@@ -345,8 +350,25 @@ def _require_parent_compatible(
     if previous is None:
         raise ValueError("parent run lacks training compatibility evidence")
     current = compatibility
+    parent_dataset = loaded.manifest.dataset
+    if previous.dataset_sha256 != parent_dataset.identity_sha256:
+        raise ValueError("parent dataset evidence is inconsistent")
+    if current.dataset_sha256 != dataset.identity_sha256:
+        raise ValueError("child dataset evidence is inconsistent")
+    observed_for_parent = build_dataset_identity(
+        name=dataset.name,
+        version=dataset.version,
+        root_reference=dataset.root_reference,
+        semantic_partition=dataset.semantic_partition,
+        framework_key=dataset.framework_key,
+        annotation_files=dataset.annotation_files,
+        class_names=dataset.class_names,
+        tasks=None if dataset.tasks is None else dict(dataset.tasks),
+        scheme=parent_dataset.scheme,
+    )
+    if observed_for_parent.identity_sha256 != parent_dataset.identity_sha256:
+        raise ValueError("parent run is incompatible in dataset")
     checks = (
-        (previous.dataset_sha256, current.dataset_sha256, "dataset"),
         (
             previous.training_sources.identity_sha256,
             current.training_sources.identity_sha256,
@@ -355,8 +377,6 @@ def _require_parent_compatible(
         (previous.python_version, current.python_version, "Python"),
         (previous.core_packages, current.core_packages, "core packages"),
     )
-    if previous.dataset_sha256 != dataset.identity_sha256:
-        raise ValueError("parent dataset evidence is inconsistent")
     for expected, actual, description in checks:
         if expected != actual:
             raise ValueError(f"parent run is incompatible in {description}")
@@ -640,12 +660,18 @@ def _verify_current_compatibility(run: Run, repository_root: Path) -> None:
     if recorded is None:
         raise ValueError("native run lacks training compatibility evidence")
     config = _load_config(run.paths.config)
+    recorded_dataset = run.manifest.dataset
     observed_dataset = _dataset_identity(
         config,
         repository_root,
-        recorded_root=run.manifest.dataset.root_reference,
+        recorded_root=(
+            recorded_dataset.root_reference
+            if recorded_dataset.scheme != DATASET_IDENTITY_SCHEME
+            else None
+        ),
+        scheme=recorded_dataset.scheme,
     )
-    if observed_dataset != run.manifest.dataset:
+    if observed_dataset.identity_sha256 != recorded_dataset.identity_sha256:
         raise ValueError("dataset annotation identity changed since run creation")
     source_paths = tuple(item.path for item in recorded.training_sources.files)
     current_sources = identify_file_set(repository_root, source_paths)
