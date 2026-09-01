@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import cos, sin
+from math import cos, hypot, sin
 from typing import Mapping
 
 import numpy as np
 
-from .box_geometry import bottom_to_center, box_corners_3d
+from .box_geometry import (
+    bottom_to_center,
+    box_corners_3d,
+    boxes_to_base_frame,
+    sensor_translation_to_base_frame,
+)
 from .contracts import SessionCalibration
 from .model_registry import finalist_aliases, finalist_range_mask
 from .results import DetectionFrame
+from .tracking import TrackedBox, TrackedFrame
 
 
 _BOX_EDGES = (
@@ -61,25 +67,6 @@ def _copied_header(types: RosMessageTypes, stamp: object, frame_id: str) -> obje
     return header
 
 
-def _translation(calibration: SessionCalibration) -> np.ndarray:
-    if not isinstance(calibration, SessionCalibration):
-        raise TypeError("calibration must be a SessionCalibration")
-    if calibration.parent_frame_id != "lexus3/base_link":
-        raise ValueError("calibration parent must be lexus3/base_link")
-    if calibration.child_frame_id != "lexus3/os_center":
-        raise ValueError("calibration child must be lexus3/os_center")
-    return np.asarray(calibration.translation_xyz, dtype=np.float64)
-
-
-def _translated_boxes(
-    result: DetectionFrame,
-    calibration: SessionCalibration,
-) -> np.ndarray:
-    boxes = np.array(result.boxes, dtype=np.float64, order="C", copy=True)
-    boxes[:, :3] += _translation(calibration)
-    return boxes
-
-
 class RosMessageBuilder:
     """Build standard detection, marker, diagnostic, and cloud messages."""
 
@@ -116,7 +103,7 @@ class RosMessageBuilder:
         calibration: SessionCalibration,
     ) -> object:
         self._require_result_identity(result)
-        boxes = _translated_boxes(result, calibration)
+        boxes = boxes_to_base_frame(result.boxes, calibration)
         centered = bottom_to_center(boxes)
         message = self._types.Detection3DArray()
         message.header = _copied_header(self._types, stamp, self._base_frame)
@@ -161,7 +148,7 @@ class RosMessageBuilder:
         self._require_result_identity(result)
         if previous_detection_count < 0:
             raise ValueError("previous_detection_count must be nonnegative")
-        boxes = _translated_boxes(result, calibration)
+        boxes = boxes_to_base_frame(result.boxes, calibration)
         centered = bottom_to_center(boxes)
         corners = box_corners_3d(boxes)
         red, green, blue = self.marker_color
@@ -235,6 +222,243 @@ class RosMessageBuilder:
         message.markers = [marker]
         return message
 
+    def tracked_detection_array(
+        self,
+        frame: TrackedFrame,
+        *,
+        stamp: object,
+    ) -> object:
+        """Build stable-ID standard detections for confirmed tracks."""
+
+        self._require_tracked_identity(frame)
+        message = self._types.Detection3DArray()
+        message.header = _copied_header(self._types, stamp, self._base_frame)
+        message.detections = []
+        for track in frame.visible_tracks:
+            box = bottom_to_center(
+                np.asarray((track.box,), dtype=np.float64)
+            )[0]
+            detection = self._types.Detection3D()
+            detection.header = _copied_header(
+                self._types,
+                stamp,
+                self._base_frame,
+            )
+            detection.id = str(track.track_id)
+            self._set_detection_box(detection, box)
+            hypothesis = self._types.ObjectHypothesisWithPose()
+            hypothesis.hypothesis.class_id = "Car"
+            hypothesis.hypothesis.score = float(track.score)
+            hypothesis.pose.pose.position.x = float(box[0])
+            hypothesis.pose.pose.position.y = float(box[1])
+            hypothesis.pose.pose.position.z = float(box[2])
+            hypothesis.pose.pose.orientation.z = sin(float(box[6]) / 2.0)
+            hypothesis.pose.pose.orientation.w = cos(float(box[6]) / 2.0)
+            detection.results = [hypothesis]
+            message.detections.append(detection)
+        return message
+
+    def tracked_marker_array(
+        self,
+        frame: TrackedFrame,
+        *,
+        stamp: object,
+        previous_track_ids: set[int] | frozenset[int],
+    ) -> object:
+        """Build stable-ID boxes, labels, velocity arrows, trails, and deletes."""
+
+        self._require_tracked_identity(frame)
+        if not isinstance(previous_track_ids, (set, frozenset)) or any(
+            isinstance(track_id, bool)
+            or not isinstance(track_id, int)
+            or track_id <= 0
+            for track_id in previous_track_ids
+        ):
+            raise ValueError("previous_track_ids must contain positive integers")
+        red, green, blue = self.marker_color
+        markers: list[object] = []
+        visible_ids: set[int] = set()
+        for track in frame.visible_tracks:
+            visible_ids.add(track.track_id)
+            box_values = np.asarray((track.box,), dtype=np.float64)
+            centered = bottom_to_center(box_values)[0]
+            corners = box_corners_3d(box_values)[0]
+            alpha = 0.35 if track.coasting else 1.0
+
+            wire = self._types.Marker()
+            wire.header = _copied_header(self._types, stamp, self._base_frame)
+            wire.ns = f"{self._model_alias}/tracked_boxes"
+            wire.id = track.track_id
+            wire.type = self._types.Marker.LINE_LIST
+            wire.action = self._types.Marker.ADD
+            wire.pose.orientation.w = 1.0
+            wire.scale.x = 0.1 if track.coasting else 0.08
+            wire.color.r = red
+            wire.color.g = green
+            wire.color.b = blue
+            wire.color.a = alpha
+            for first, second in _BOX_EDGES:
+                for corner_index in (first, second):
+                    wire.points.append(self._point(corners[corner_index]))
+            markers.append(wire)
+
+            speed = hypot(track.velocity_xyz[0], track.velocity_xyz[1])
+            state = "coasting" if track.coasting else "fresh"
+            label = self._types.Marker()
+            label.header = _copied_header(self._types, stamp, self._base_frame)
+            label.ns = f"{self._model_alias}/tracked_labels"
+            label.id = track.track_id
+            label.type = self._types.Marker.TEXT_VIEW_FACING
+            label.action = self._types.Marker.ADD
+            label.pose.position.x = float(centered[0])
+            label.pose.position.y = float(centered[1])
+            label.pose.position.z = float(centered[2] + centered[5] / 2.0 + 0.35)
+            label.pose.orientation.w = 1.0
+            label.scale.z = 0.45
+            label.color.r = red
+            label.color.g = green
+            label.color.b = blue
+            label.color.a = 0.55 if track.coasting else 1.0
+            label.text = (
+                f"Car #{track.track_id} {track.score:.2f} "
+                f"{speed:.1f} m/s {state}"
+            )
+            markers.append(label)
+
+            velocity = self._types.Marker()
+            velocity.header = _copied_header(self._types, stamp, self._base_frame)
+            velocity.ns = f"{self._model_alias}/tracked_velocity"
+            velocity.id = track.track_id
+            if speed > 0.05:
+                velocity.type = self._types.Marker.ARROW
+                velocity.action = self._types.Marker.ADD
+                velocity.pose.orientation.w = 1.0
+                velocity.scale.x = 0.07
+                velocity.scale.y = 0.14
+                velocity.scale.z = 0.14
+                velocity.color.r = red
+                velocity.color.g = green
+                velocity.color.b = blue
+                velocity.color.a = alpha
+                velocity.points = [
+                    self._point(centered[:3]),
+                    self._point(
+                        (
+                            centered[0] + track.velocity_xyz[0],
+                            centered[1] + track.velocity_xyz[1],
+                            centered[2] + track.velocity_xyz[2],
+                        )
+                    ),
+                ]
+            else:
+                velocity.action = self._types.Marker.DELETE
+            markers.append(velocity)
+
+            trail = self._types.Marker()
+            trail.header = _copied_header(self._types, stamp, self._base_frame)
+            trail.ns = f"{self._model_alias}/tracked_trails"
+            trail.id = track.track_id
+            if len(track.trail) >= 2:
+                trail.type = self._types.Marker.LINE_STRIP
+                trail.action = self._types.Marker.ADD
+                trail.pose.orientation.w = 1.0
+                trail.scale.x = 0.07
+                trail.color.r = red
+                trail.color.g = green
+                trail.color.b = blue
+                trail.color.a = alpha
+                trail.points = [self._point(point) for point in track.trail]
+            else:
+                trail.action = self._types.Marker.DELETE
+            markers.append(trail)
+
+        for stale_id in sorted(set(previous_track_ids) - visible_ids):
+            for suffix in (
+                "tracked_boxes",
+                "tracked_labels",
+                "tracked_velocity",
+                "tracked_trails",
+            ):
+                stale = self._types.Marker()
+                stale.header = _copied_header(
+                    self._types,
+                    stamp,
+                    self._base_frame,
+                )
+                stale.ns = f"{self._model_alias}/{suffix}"
+                stale.id = stale_id
+                stale.action = self._types.Marker.DELETE
+                markers.append(stale)
+        message = self._types.MarkerArray()
+        message.markers = markers
+        return message
+
+    def clear_tracked_markers(self, *, stamp: object) -> object:
+        marker = self._types.Marker()
+        marker.header = _copied_header(self._types, stamp, self._base_frame)
+        marker.ns = f"{self._model_alias}/tracked"
+        marker.id = 0
+        marker.action = self._types.Marker.DELETEALL
+        message = self._types.MarkerArray()
+        message.markers = [marker]
+        return message
+
+    def tracking_diagnostic_array(
+        self,
+        values: Mapping[str, object],
+        *,
+        stamp: object,
+    ) -> object:
+        message = self._types.DiagnosticArray()
+        message.header = _copied_header(self._types, stamp, self._base_frame)
+        status = self._types.DiagnosticStatus()
+        last_error = str(values.get("last_error", ""))
+        status.level = (
+            self._types.DiagnosticStatus.ERROR
+            if last_error
+            else self._types.DiagnosticStatus.OK
+        )
+        status.message = "tracking failure" if last_error else "tracking active"
+        status.name = f"centerpoint/{self._model_alias}/tracking"
+        status.hardware_id = str(values.get("checkpoint_sha256", ""))
+        status.values = []
+        for key, value in values.items():
+            item = self._types.KeyValue()
+            item.key = str(key)
+            item.value = str(value)
+            status.values.append(item)
+        message.status = [status]
+        return message
+
+    def _require_tracked_identity(self, frame: TrackedFrame) -> None:
+        if not isinstance(frame, TrackedFrame):
+            raise TypeError("frame must be a TrackedFrame")
+        if frame.model_alias != self._model_alias:
+            raise ValueError("tracked model identity does not match topic identity")
+        if frame.coordinate_frame != self._base_frame:
+            raise ValueError("tracked frame must use the configured base frame")
+
+    def _point(self, values: object) -> object:
+        xyz = np.asarray(values, dtype=np.float64)
+        if xyz.shape != (3,) or not np.isfinite(xyz).all():
+            raise ValueError("marker point must contain three finite values")
+        point = self._types.Point()
+        point.x = float(xyz[0])
+        point.y = float(xyz[1])
+        point.z = float(xyz[2])
+        return point
+
+    @staticmethod
+    def _set_detection_box(detection: object, box: np.ndarray) -> None:
+        detection.bbox.center.position.x = float(box[0])
+        detection.bbox.center.position.y = float(box[1])
+        detection.bbox.center.position.z = float(box[2])
+        detection.bbox.center.orientation.z = sin(float(box[6]) / 2.0)
+        detection.bbox.center.orientation.w = cos(float(box[6]) / 2.0)
+        detection.bbox.size.x = float(box[3])
+        detection.bbox.size.y = float(box[4])
+        detection.bbox.size.z = float(box[5])
+
     def model_point_cloud(
         self,
         points: np.ndarray,
@@ -255,7 +479,9 @@ class RosMessageBuilder:
             order="C",
             copy=True,
         )
-        selected[:, :3] += _translation(calibration).astype(np.float32)
+        selected[:, :3] += sensor_translation_to_base_frame(calibration).astype(
+            np.float32
+        )
 
         message = self._types.PointCloud2()
         message.header = _copied_header(self._types, stamp, self._base_frame)

@@ -3,12 +3,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from lidar_model_selection.playback.contracts import SessionCalibration
 from lidar_model_selection.playback.results import DetectionFrame
 from lidar_model_selection.playback.ros_messages import (
     RosMessageBuilder,
     RosMessageTypes,
+)
+from lidar_model_selection.playback.tracking import (
+    TrackedBox,
+    TrackedFrame,
+    TrackingDiagnostics,
 )
 
 
@@ -56,9 +62,11 @@ class MarkerArray:
 
 
 class Marker:
+    ARROW = 0
     ADD = 0
     DELETE = 2
     DELETEALL = 3
+    LINE_STRIP = 4
     LINE_LIST = 5
     TEXT_VIEW_FACING = 9
 
@@ -270,3 +278,136 @@ def test_diagnostics_preserve_byte_level_and_all_values() -> None:
         stamp=STAMP,
     )
     assert failure.status[0].level == b"\x02"
+
+
+def _tracking_diagnostics() -> TrackingDiagnostics:
+    return TrackingDiagnostics(
+        active_tracks=2,
+        confirmed_tracks=2,
+        tentative_tracks=0,
+        coasting_tracks=1,
+        created_tracks_total=3,
+        deleted_tracks_total=1,
+        created_tracks=0,
+        removed_tracks=0,
+        matches=1,
+        misses=1,
+        unmatched_detections=0,
+        unmatched_tracks=1,
+        reset_count=0,
+        last_reset_reason=None,
+        association_ms=0.05,
+        update_ms=0.2,
+        last_timestamp_ns=12_000_000_034,
+        last_dt_seconds=0.1,
+        maximum_observed_gap_seconds=0.1,
+        tracked_frames_total=3,
+    )
+
+
+def _tracked_frame(*, tracks: tuple[TrackedBox, ...]) -> TrackedFrame:
+    return TrackedFrame(
+        session_id="live:/lexus3/os_center/points",
+        frame_index=7,
+        timestamp_ns=12_000_000_034,
+        generation=0,
+        coordinate_frame="lexus3/base_link",
+        model_alias="voxel0075",
+        run_id="run",
+        checkpoint_sha256="b" * 64,
+        tracks=tracks,
+        diagnostics=_tracking_diagnostics(),
+    )
+
+
+def _track(track_id: int, *, coasting: bool) -> TrackedBox:
+    return TrackedBox(
+        track_id=track_id,
+        label=0,
+        box=(1.75, 2.0, 4.91, 4.0, 2.0, 1.0, np.pi / 2),
+        score=0.875,
+        velocity_xyz=(2.0, 0.0, 0.0),
+        hits=3,
+        missed_frames=1 if coasting else 0,
+        confirmed=True,
+        coasting=coasting,
+        timestamp_ns=12_000_000_034,
+        trail=((1.0, 2.0, 4.91), (1.75, 2.0, 4.91)),
+    )
+
+
+def test_tracked_messages_use_stable_ids_and_distinguish_coasting() -> None:
+    builder = RosMessageBuilder(
+        TYPES,
+        model_alias="voxel0075",
+        base_frame="lexus3/base_link",
+    )
+    frame = _tracked_frame(tracks=(_track(12, coasting=False), _track(13, coasting=True)))
+    detections = builder.tracked_detection_array(frame, stamp=STAMP)
+    assert [detection.id for detection in detections.detections] == ["12", "13"]
+    assert detections.detections[0].bbox.center.position.z == pytest.approx(5.41)
+
+    markers = builder.tracked_marker_array(
+        frame,
+        stamp=STAMP,
+        previous_track_ids={12, 13, 99},
+    ).markers
+    boxes = [marker for marker in markers if marker.ns.endswith("tracked_boxes")]
+    assert [(marker.id, marker.action) for marker in boxes[:2]] == [
+        (12, Marker.ADD),
+        (13, Marker.ADD),
+    ]
+    assert boxes[0].color.a == 1.0
+    assert boxes[1].color.a == 0.35
+    labels = [
+        marker
+        for marker in markers
+        if marker.ns.endswith("tracked_labels") and marker.action == Marker.ADD
+    ]
+    assert labels[0].text == "Car #12 0.88 2.0 m/s fresh"
+    assert labels[1].text == "Car #13 0.88 2.0 m/s coasting"
+    stale = [marker for marker in markers if marker.id == 99]
+    assert len(stale) == 4
+    assert all(marker.action == Marker.DELETE for marker in stale)
+
+
+def test_tracked_marker_expiration_and_deleteall_leave_no_marker_ids() -> None:
+    builder = RosMessageBuilder(
+        TYPES,
+        model_alias="voxel0075",
+        base_frame="lexus3/base_link",
+    )
+    empty = _tracked_frame(tracks=())
+    deleted = builder.tracked_marker_array(
+        empty,
+        stamp=STAMP,
+        previous_track_ids={12, 13},
+    ).markers
+    assert len(deleted) == 8
+    assert {(marker.id, marker.action) for marker in deleted} == {
+        (12, Marker.DELETE),
+        (13, Marker.DELETE),
+    }
+    clear = builder.clear_tracked_markers(stamp=STAMP)
+    assert clear.markers[0].action == Marker.DELETEALL
+
+
+def test_tracking_diagnostic_includes_all_supplied_evidence() -> None:
+    builder = RosMessageBuilder(
+        TYPES,
+        model_alias="voxel0075",
+        base_frame="lexus3/base_link",
+    )
+    values = {
+        "checkpoint_sha256": "b" * 64,
+        "active_tracks": 2,
+        "coasting_tracks": 1,
+        "last_error": "",
+    }
+    message = builder.tracking_diagnostic_array(values, stamp=STAMP)
+    status = message.status[0]
+    assert status.name == "centerpoint/voxel0075/tracking"
+    assert status.level == DiagnosticStatus.OK
+    assert {item.key: item.value for item in status.values}[
+        "coasting_tracks"
+    ] == "1"

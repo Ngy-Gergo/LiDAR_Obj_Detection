@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy
 
+from .contracts import SessionCalibration
+
 
 def _validated_boxes(boxes: numpy.ndarray) -> numpy.ndarray:
     values = numpy.asarray(boxes)
@@ -28,6 +30,44 @@ def bottom_to_center(boxes: numpy.ndarray) -> numpy.ndarray:
     centered[:, 2] += centered[:, 5] / 2.0
     centered.setflags(write=False)
     return centered
+
+
+def boxes_to_base_frame(
+    boxes: numpy.ndarray,
+    calibration: SessionCalibration,
+) -> numpy.ndarray:
+    """Translate model-frame boxes into the recorded vehicle base frame.
+
+    Kaposvar normalization has already applied the recorded sensor rotation to
+    model points.  Detector boxes therefore need only the validated recorded
+    sensor translation here.  Keeping this operation beside the shared box
+    geometry makes raw and tracked ROS output use exactly the same conversion.
+    """
+
+    values = _validated_boxes(boxes)
+    translated = numpy.array(values, dtype=numpy.float64, order="C", copy=True)
+    translated[:, :3] += sensor_translation_to_base_frame(calibration)
+    translated.setflags(write=False)
+    return translated
+
+
+def sensor_translation_to_base_frame(
+    calibration: SessionCalibration,
+) -> numpy.ndarray:
+    """Return the validated recorded sensor translation as immutable XYZ."""
+
+    if not isinstance(calibration, SessionCalibration):
+        raise TypeError("calibration must be a SessionCalibration")
+    if calibration.parent_frame_id != "lexus3/base_link":
+        raise ValueError("calibration parent must be lexus3/base_link")
+    if calibration.child_frame_id != "lexus3/os_center":
+        raise ValueError("calibration child must be lexus3/os_center")
+    translation = numpy.asarray(
+        calibration.translation_xyz,
+        dtype=numpy.float64,
+    ).copy()
+    translation.setflags(write=False)
+    return translation
 
 
 def bev_corners(boxes: numpy.ndarray) -> numpy.ndarray:

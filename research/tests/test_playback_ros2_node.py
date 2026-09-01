@@ -60,6 +60,38 @@ def test_cli_is_explicit_and_passes_only_ros_arguments_to_rclpy() -> None:
     assert ros_args == ["--ros-args", "-p", "use_sim_time:=true"]
 
 
+def test_cli_tracking_is_opt_in_and_validates_useful_bounds() -> None:
+    config, _ = ros2_node._parse_arguments(
+        [
+            *_args(),
+            "--enable-tracking",
+            "--track-min-hits",
+            "3",
+            "--track-max-missed",
+            "4",
+            "--track-max-gap-seconds",
+            "1.25",
+            "--track-association-distance",
+            "5.5",
+            "--track-smoothing",
+            "0.7",
+            "--track-trail-length",
+            "24",
+        ]
+    )
+    assert config.enable_tracking
+    assert ros2_node._tracker_config(config).min_confirmed_hits == 3
+    assert ros2_node._tracker_config(config).max_missed_frames == 4
+    assert ros2_node._tracker_config(config).max_time_gap_seconds == 1.25
+    assert ros2_node._tracker_config(config).association_distance_meters == 5.5
+    assert ros2_node._tracker_config(config).position_smoothing == 0.7
+    assert ros2_node._tracker_config(config).score_smoothing == 0.7
+    assert ros2_node._tracker_config(config).trail_length == 24
+
+    with pytest.raises(SystemExit):
+        ros2_node._parse_arguments([*_args(), "--track-trail-length", "0"])
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
@@ -95,6 +127,19 @@ def test_one_cli_model_constructs_exactly_one_bound_detector() -> None:
             {"device": "cuda:0", "score_threshold": 0.1},
         )
     ]
+
+
+def test_checkpoint_pin_is_checked_before_detector_construction() -> None:
+    config, _ = ros2_node._parse_arguments(
+        [*_args(), "--checkpoint-sha256", "0" * 64]
+    )
+    calls = []
+    with pytest.raises(ValueError, match="protected registry"):
+        ros2_node._build_detector(
+            config,
+            lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+    assert calls == []
 
 
 def test_main_forwards_only_ros_args_and_closes_node_cleanly(monkeypatch) -> None:
@@ -409,12 +454,17 @@ def _bare_node(runtime):
     node._marker_lock = __import__("threading").RLock()
     node._tf_lock = __import__("threading").RLock()
     node._previous_detection_count = 3
+    node._previous_track_ids = set()
+    node._tracker = None
     node._clock = _FakeClock()
     node._logger = _FakeLogger()
     node._builder = SimpleNamespace(
         clear_markers=lambda *, stamp: ("DELETEALL", stamp),
     )
     node._markers_publisher = _FakePublisher()
+    node._tracked_markers_publisher = None
+    node._tracked_detections_publisher = None
+    node._tracking_diagnostics_publisher = None
     return node
 
 
@@ -535,6 +585,45 @@ def test_reset_recreates_tf_then_clears_markers() -> None:
     assert events == ["tf-reset", "markers:clock_jump reset"]
 
 
+def test_reset_sequence_resets_tracker_once_with_central_generation() -> None:
+    valid = {"value": True}
+    runtime = _node_test_runtime(valid)
+    runtime.message_types = SimpleNamespace(
+        Header=lambda: SimpleNamespace(
+            stamp=SimpleNamespace(sec=0, nanosec=0),
+        )
+    )
+    node = _bare_node(runtime)
+    events = []
+    node._tracker = SimpleNamespace(
+        reset=lambda *, reason, generation=None: events.append(
+            ("tracker", reason, generation)
+        )
+    )
+    node._replace_tf_state = lambda: events.append(("tf",))
+    node._clear_markers = lambda stamp, *, reason: (
+        events.append(("raw", reason)) or True
+    )
+    node._clear_tracked_markers = lambda stamp, *, reason: (
+        events.append(("tracked", reason)) or True
+    )
+
+    node._reset_sequence(
+        SimpleNamespace(
+            reason="point_timestamp",
+            timestamp_ns=50,
+            generation=7,
+        )
+    )
+
+    assert events == [
+        ("tf",),
+        ("tracker", "point_timestamp reset", 7),
+        ("raw", "point_timestamp reset"),
+        ("tracked", "point_timestamp reset"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("status", "expected_inference_ms"),
     [("empty_after_range_filter", None), ("success", 9.0)],
@@ -562,10 +651,58 @@ def test_adapter_reports_inference_only_when_model_execution_occurs(
     )
     monkeypatch.setattr(ros2_node, "pointcloud2_to_frame", lambda *args, **kwargs: frame)
     message = SimpleNamespace(header=SimpleNamespace(stamp=object()))
-    item = SimpleNamespace(payload=message, frame_index=0)
+    item = SimpleNamespace(payload=message, frame_index=0, generation=0)
 
     result = node._process_item(item)
 
     assert result.tf_lookup_ms == 0.5
     assert result.conversion_ms == 2.0
     assert result.inference_ms == expected_inference_ms
+
+
+def test_tracking_failure_does_not_suppress_valid_raw_detector_output() -> None:
+    valid = {"value": True}
+    runtime = _node_test_runtime(valid)
+    node = _bare_node(runtime)
+    tracker_events = []
+
+    def fail_tracking(*args, **kwargs):
+        raise ValueError("synthetic tracking failure")
+
+    node._tracker = SimpleNamespace(
+        update=fail_tracking,
+        reset=lambda *, reason, generation=None: tracker_events.append(
+            (reason, generation)
+        ),
+    )
+    node._failed_tracking_frames = 0
+    node._last_tracking_error = ""
+    node._detections_publisher = _FakePublisher()
+    node._markers_publisher = _FakePublisher()
+    node._tracked_detections_publisher = _FakePublisher()
+    node._tracked_markers_publisher = _FakePublisher()
+    node._model_cloud_publisher = None
+    node._builder = SimpleNamespace(
+        detection_array=lambda *args, **kwargs: "raw detections",
+        marker_array=lambda *args, **kwargs: "raw markers",
+        clear_markers=lambda *, stamp: "clear raw",
+        clear_tracked_markers=lambda *, stamp: "clear tracked",
+    )
+    product = ros2_node._PublishedFrame(
+        source_message=SimpleNamespace(header=SimpleNamespace(stamp=object())),
+        normalized_frame=SimpleNamespace(points=None),
+        detections=SimpleNamespace(detection_count=2),
+        calibration=object(),
+        generation=0,
+    )
+
+    node._publish_frame(product)
+
+    assert node._detections_publisher.messages == ["raw detections"]
+    assert node._markers_publisher.messages == ["raw markers"]
+    assert node._tracked_detections_publisher.messages == []
+    assert node._tracked_markers_publisher.messages == ["clear tracked"]
+    assert node._previous_detection_count == 2
+    assert node._failed_tracking_frames == 1
+    assert "synthetic tracking failure" in node._last_tracking_error
+    assert tracker_events == [("tracking failure", None)]

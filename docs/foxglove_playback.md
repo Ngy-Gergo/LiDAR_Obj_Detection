@@ -1,9 +1,12 @@
 # ROS2 and Foxglove playback
 
-The stage-1 adapter subscribes to the original bag-played cloud and runs one
+The adapter subscribes to the original bag-played cloud and runs one
 protected finalist per process. It publishes only standard ROS2 messages;
 Foxglove Bridge observes the same ROS graph as the detector nodes. Do not open
 the MCAP directly in Foxglove for this workflow.
+
+For the opt-in stable-ID tracker and one-command presentation launcher, see
+[`tracked_foxglove_demo.md`](tracked_foxglove_demo.md).
 
 The acceptance session is the July 27 recording with working synchronized
 camera images:
@@ -183,6 +186,9 @@ QoS override at every playback rate.
 | `/centerpoint/<model>/markers` | `visualization_msgs/msg/MarkerArray` | `lexus3/base_link` | reliable, transient local, keep last 1 |
 | `/centerpoint/<model>/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | `lexus3/base_link` | reliable, volatile, keep last 10 |
 | `/centerpoint/<model>/model_points` | `sensor_msgs/msg/PointCloud2` | `lexus3/base_link` | best effort, volatile, keep last 1 |
+| `/centerpoint/<model>/tracked_detections` | `vision_msgs/msg/Detection3DArray` | `lexus3/base_link` | reliable, volatile, keep last 1; only with `--enable-tracking` |
+| `/centerpoint/<model>/tracked_markers` | `visualization_msgs/msg/MarkerArray` | `lexus3/base_link` | reliable, transient local, keep last 1; only with `--enable-tracking` |
+| `/centerpoint/<model>/tracking_diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | `lexus3/base_link` | reliable, volatile, keep last 10; only with `--enable-tracking` |
 
 The exact acquisition stamp propagates to detections, markers, and the optional
 model cloud. Missing, stale, mismatched, or invalid TF clears prior markers,
