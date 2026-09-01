@@ -9,7 +9,7 @@ continuation did not revert to or reconstruct the legacy `main` architecture.
 - **M1–M4 — complete at handoff.** Durable storage, provenance, checkpoint
   identity, canonical runs, immutable results, training/scheduling, evaluation,
   synchronized benchmarking, smoke execution, and playback were retained.
-- **M5 — complete.** Comparison schema v2 carries resolved available AP40,
+- **M5 — complete.** Comparison schema v3 carries resolved available AP40,
   latency, memory, checkpoint-size, and 20 Hz evidence. `plotting.py` renders
   only resolved rows, with a thin `tools/plot.py`. Dataset scheme
   `lidar-dataset-v2` excludes observed machine paths from semantic identity
@@ -43,6 +43,27 @@ continuation did not revert to or reconstruct the legacy `main` architecture.
   No Manager/Service/Repository/Controller layers or competing Experiment
   concept were introduced.
 
+## Fresh six-model campaign
+
+The six fresh KITTI Car-only CenterPoint runs created on 2026-08-27 completed
+all 20 training epochs. Each protected run subsequently produced one successful
+immutable prediction-smoke result, one final KITTI evaluation result, and one
+synchronized benchmark result. The resolved evidence is recorded under
+[`reports/20260827-six-model-20epoch/`](reports/20260827-six-model-20epoch/):
+
+- [`fresh-end-to-end-p95.json`](reports/20260827-six-model-20epoch/fresh-end-to-end-p95.json)
+  and [`figures/end-to-end-p95/`](reports/20260827-six-model-20epoch/figures/end-to-end-p95/);
+- [`fresh-prediction-p95.json`](reports/20260827-six-model-20epoch/fresh-prediction-p95.json)
+  and [`figures/prediction-p95/`](reports/20260827-six-model-20epoch/figures/prediction-p95/).
+
+The measured Pareto frontier selects `voxel0075` as the accuracy finalist,
+`pillar02` as the speed finalist, and retains `voxel01` as the middle reference.
+Each DCN variant was dominated by its corresponding non-DCN model in this
+campaign. All six measured end-to-end p95 latencies were below 50 ms on the
+RTX 2080 Ti workstation; this preliminary result is not a low-end deployment
+claim. The report README records the exact metrics, methodology, hardware,
+dataset-version waiver, and study limitations.
+
 ## Validation
 
 Full real Python 3.10 environment command:
@@ -55,7 +76,9 @@ PYTHONPATH=research/src:runtime \
   -m pytest -p no:cacheprovider research/tests runtime/test -q
 ```
 
-Result: **373 passed, 0 failed, 0 skipped** in 14.66 seconds.
+Foundation result: **373 passed, 0 failed, 0 skipped** in 14.66 seconds.
+Current post-campaign result: **406 passed, 0 failed, 0 skipped** in 16.73
+seconds.
 
 Also passed:
 
@@ -80,11 +103,11 @@ Validated imports and real dataset access with:
 - MMDetection 3.3.0
 - MMDetection3D 1.4.0
 
-GPU execution remains blocked: `nvidia-smi` cannot communicate with the NVIDIA
-driver and Torch reports zero CUDA devices. Therefore no new real CUDA
-training, checkpoint evaluation, synchronized benchmark, or smoke execution
-was claimed. Exact historical outputs were migrated and parity-checked without
-re-running their GPU measurement.
+The Codex validation environment remains GPU-inaccessible. The completed
+campaign's immutable host-generated records, however, bind successful smoke,
+evaluation, and synchronized benchmark execution on an NVIDIA GeForce RTX 2080
+Ti with NVIDIA driver `575.57.08`. Historical imported evidence remains
+separate from these fresh results.
 
 ## Architecture review
 
@@ -105,5 +128,8 @@ ignored; tracked historical summaries/figures remain intentional evidence.
 
 ## Next phase
 
-The next major roadmap phase is **TensorRT feasibility and numerical parity**.
-Do not begin it as part of this foundation milestone.
+The next deadline phase is real Kaposvár recording playback, bounding-box
+validation, runtime comparison, and detection-level tracking. These stages are
+not yet complete. TensorRT, loss changes, NuScenes training, multi-seed
+experiments, longer finalist training, and an official-pretrained checkpoint
+comparison remain explicitly deferred.
