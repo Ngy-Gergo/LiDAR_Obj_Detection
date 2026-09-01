@@ -42,6 +42,14 @@ continuation did not revert to or reconstruct the legacy `main` architecture.
   generated-file, whitespace, CLI, grammar, and runtime-boundary reviews pass.
   No Manager/Service/Repository/Controller layers or competing Experiment
   concept were introduced.
+- **M10 — ROS2 playback adapter hardened; visual acceptance remains.** The
+  standard-message Foxglove adapter now has repository-owned complete
+  `/tf_static` replay QoS, backward-clock generation/TF reset, lifecycle-safe
+  shutdown, policy-matched PointCloud2 subscription depth, distinct middleware
+  and application loss accounting, and stage-accurate live diagnostics. The
+  July 27 synchronized LiDAR/camera acceptance procedure is documented in
+  [`docs/foxglove_playback.md`](../docs/foxglove_playback.md). This does not
+  claim that the remaining user-run GPU visual acceptance has passed.
 
 ## Fresh six-model campaign
 
@@ -79,6 +87,8 @@ PYTHONPATH=research/src:runtime \
 Foundation result: **373 passed, 0 failed, 0 skipped** in 14.66 seconds.
 Current post-campaign result: **406 passed, 0 failed, 0 skipped** in 16.73
 seconds.
+Current post-playback-hardening result: **550 passed, 0 failed, 0 skipped** in
+17.42 seconds.
 
 Also passed:
 
@@ -128,8 +138,9 @@ ignored; tracked historical summaries/figures remain intentional evidence.
 
 ## Next phase
 
-The next deadline phase is real Kaposvár recording playback, bounding-box
-validation, runtime comparison, and detection-level tracking. These stages are
-not yet complete. TensorRT, loss changes, NuScenes training, multi-seed
+The next acceptance step is the documented host-GPU side-by-side Kaposvár
+bounding-box inspection using the working July 27 camera recording. Runtime
+comparison and detection-level tracking remain later work and are not part of
+the adapter hardening. TensorRT, loss changes, NuScenes training, multi-seed
 experiments, longer finalist training, and an official-pretrained checkpoint
 comparison remain explicitly deferred.

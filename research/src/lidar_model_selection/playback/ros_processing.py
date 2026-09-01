@@ -20,6 +20,7 @@ from typing import Callable, Deque, Generic, Literal, TypeVar, cast
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
 ProcessingPolicy = Literal["all", "latest"]
+ResetReason = Literal["clock_jump", "point_timestamp"]
 
 
 def _positive_integer(value: object, field_name: str) -> int:
@@ -55,37 +56,75 @@ class ProcessingItem(Generic[InputT]):
 
 
 @dataclass(frozen=True, slots=True)
-class ProcessingResult(Generic[OutputT]):
-    """A processor result with optional measured stage timings.
+class ProcessingTimings:
+    """Measured processing stages; unavailable stages remain ``None``."""
 
-    A processor may return its output directly.  In that case the coordinator
-    records the complete processor-call duration as ``detector_ms``.  This
-    wrapper lets an adapter report conversion and detector time separately.
+    tf_lookup_ms: float | None = None
+    conversion_ms: float | None = None
+    inference_ms: float | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("tf_lookup_ms", "conversion_ms", "inference_ms"):
+            object.__setattr__(
+                self,
+                field_name,
+                _optional_milliseconds(getattr(self, field_name), field_name),
+            )
+
+
+class ProcessingStageError(RuntimeError):
+    """A processing failure with exact stage, code, and completed timings."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        code: str,
+        message: str,
+        timings: ProcessingTimings | None = None,
+    ) -> None:
+        for value, name in ((stage, "stage"), (code, "code"), (message, "message")):
+            if not isinstance(value, str):
+                raise TypeError(f"{name} must be a string")
+            if not value.strip():
+                raise ValueError(f"{name} must be non-empty")
+        if timings is not None and not isinstance(timings, ProcessingTimings):
+            raise TypeError("timings must be ProcessingTimings when provided")
+        self.stage = stage
+        self.code = code
+        self.timings = timings or ProcessingTimings()
+        super().__init__(f"{code}: {message}")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingResult(Generic[OutputT]):
+    """A processor result with exact optional measured stage timings.
+
+    A direct, unwrapped output remains valid, but the coordinator does not
+    guess which part of that processor call was inference.
     """
 
     value: OutputT
+    tf_lookup_ms: float | None = None
     conversion_ms: float | None = None
-    detector_ms: float | None = None
+    inference_ms: float | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "conversion_ms",
-            _optional_milliseconds(self.conversion_ms, "conversion_ms"),
-        )
-        object.__setattr__(
-            self,
-            "detector_ms",
-            _optional_milliseconds(self.detector_ms, "detector_ms"),
-        )
+        for field_name in ("tf_lookup_ms", "conversion_ms", "inference_ms"):
+            object.__setattr__(
+                self,
+                field_name,
+                _optional_milliseconds(getattr(self, field_name), field_name),
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class ResetEvent:
-    """Evidence emitted when a non-increasing input timestamp starts a loop."""
+    """Evidence emitted when either clock or point time starts a new loop."""
 
-    previous_timestamp_ns: int
-    timestamp_ns: int
+    reason: ResetReason
+    previous_timestamp_ns: int | None
+    timestamp_ns: int | None
     generation: int
     dropped_pending: int
 
@@ -112,6 +151,7 @@ class ProcessingSnapshot:
     dropped: int
     failed: int
     rejected: int
+    middleware_lost: int
     loops: int
     pending: int
     in_flight: bool
@@ -122,10 +162,12 @@ class ProcessingSnapshot:
     last_frame_index: int | None
     input_age_ms: float | None
     last_queue_ms: float | None
+    last_tf_lookup_ms: float | None
     last_conversion_ms: float | None
-    last_detector_ms: float | None
+    last_inference_ms: float | None
     last_publish_ms: float | None
     last_end_to_end_ms: float | None
+    last_reset_reason: ResetReason | None
     last_error_stage: str | None
     last_error_code: str | None
     last_error_message: str | None
@@ -193,6 +235,7 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
         self._in_flight = False
         self._generation = 0
         self._next_frame_index = 0
+        self._last_ordering_timestamp_ns: int | None = None
         self._last_input_timestamp_ns: int | None = None
         self._last_input_frame: str | None = None
         self._last_input_monotonic_ns: int | None = None
@@ -203,16 +246,20 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
         self._dropped = 0
         self._failed = 0
         self._rejected = 0
+        self._middleware_lost = 0
         self._loops = 0
 
         self._last_queue_ms: float | None = None
+        self._last_tf_lookup_ms: float | None = None
         self._last_conversion_ms: float | None = None
-        self._last_detector_ms: float | None = None
+        self._last_inference_ms: float | None = None
         self._last_publish_ms: float | None = None
         self._last_end_to_end_ms: float | None = None
+        self._last_reset_reason: ResetReason | None = None
         self._last_error_stage: str | None = None
         self._last_error_code: str | None = None
         self._last_error_message: str | None = None
+        self._suppress_next_clock_reset = False
         self._close_callback_called = False
 
         self._worker = threading.Thread(
@@ -260,7 +307,7 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                         frame_index=None,
                         reason="coordinator_closed",
                     )
-                previous_timestamp_ns = self._last_input_timestamp_ns
+                previous_timestamp_ns = self._last_ordering_timestamp_ns
 
             is_reset = (
                 previous_timestamp_ns is not None
@@ -304,22 +351,17 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                         reason="coordinator_closed",
                     )
                 self._received += 1
-                self._loops += 1
-                self._generation += 1
-                self._next_frame_index = 0
-                dropped_pending = len(self._queue)
-                self._queue.clear()
-                self._dropped += dropped_pending
                 received_ns = self._clock_ns()
+                event = self._reset_locked(
+                    reason="point_timestamp",
+                    previous_timestamp_ns=previous_timestamp_ns,
+                    timestamp_ns=timestamp_ns,
+                )
+                self._suppress_next_clock_reset = True
+                self._last_ordering_timestamp_ns = timestamp_ns
                 self._last_input_timestamp_ns = timestamp_ns
                 self._last_input_frame = input_frame
                 self._last_input_monotonic_ns = received_ns
-                event = ResetEvent(
-                    previous_timestamp_ns=previous_timestamp_ns,
-                    timestamp_ns=timestamp_ns,
-                    generation=self._generation,
-                    dropped_pending=dropped_pending,
-                )
 
             if self._reset is not None:
                 try:
@@ -337,6 +379,80 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                     received_monotonic_ns=received_ns,
                 )
 
+    def reset_generation(
+        self,
+        *,
+        reason: ResetReason,
+        timestamp_ns: int | None,
+    ) -> bool:
+        """Invalidate the current timeline once and report whether it changed.
+
+        Clock-driven resets clear point ordering so the first point in the new
+        loop cannot trigger a duplicate fallback reset.  Conversely, when the
+        point fallback wins the race, the immediately following clock callback
+        is consumed without creating a second generation.
+        """
+
+        if reason not in ("clock_jump", "point_timestamp"):
+            raise ValueError("reason must be 'clock_jump' or 'point_timestamp'")
+        checked_timestamp_ns = None
+        if timestamp_ns is not None:
+            checked_timestamp_ns = _positive_integer(timestamp_ns, "timestamp_ns")
+
+        with self._submit_lock:
+            with self._publication_gate:
+                with self._condition:
+                    if not self._accepting:
+                        return False
+                    if reason == "clock_jump" and self._suppress_next_clock_reset:
+                        self._suppress_next_clock_reset = False
+                        return False
+                    event = self._reset_locked(
+                        reason=reason,
+                        previous_timestamp_ns=self._last_ordering_timestamp_ns,
+                        timestamp_ns=checked_timestamp_ns,
+                    )
+                    if reason == "point_timestamp":
+                        self._suppress_next_clock_reset = True
+                    self._last_ordering_timestamp_ns = None
+
+                if self._reset is not None:
+                    try:
+                        self._reset(event)
+                    except Exception as exc:  # diagnostic evidence, worker survives
+                        self._record_error("reset", exc)
+                return True
+
+    def _reset_locked(
+        self,
+        *,
+        reason: ResetReason,
+        previous_timestamp_ns: int | None,
+        timestamp_ns: int | None,
+    ) -> ResetEvent:
+        self._loops += 1
+        self._generation += 1
+        self._next_frame_index = 0
+        self._last_frame_index = None
+        dropped_pending = len(self._queue)
+        self._queue.clear()
+        self._dropped += dropped_pending
+        self._condition.notify_all()
+        self._last_queue_ms = None
+        self._last_tf_lookup_ms = None
+        self._last_conversion_ms = None
+        self._last_inference_ms = None
+        self._last_publish_ms = None
+        self._last_end_to_end_ms = None
+        self._last_reset_reason = reason
+        return ResetEvent(
+            reason=reason,
+            previous_timestamp_ns=previous_timestamp_ns,
+            timestamp_ns=timestamp_ns,
+            generation=self._generation,
+            dropped_pending=dropped_pending,
+        )
+
     def _enqueue_locked(
         self,
         payload: InputT,
@@ -350,9 +466,12 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
         if not already_received:
             self._received += 1
             received_monotonic_ns = self._clock_ns()
+            self._last_ordering_timestamp_ns = timestamp_ns
             self._last_input_timestamp_ns = timestamp_ns
             self._last_input_frame = input_frame
             self._last_input_monotonic_ns = received_monotonic_ns
+            if not reset:
+                self._suppress_next_clock_reset = False
         assert received_monotonic_ns is not None
 
         if self._policy == "all" and len(self._queue) >= self._capacity:
@@ -414,6 +533,7 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                 dropped=self._dropped,
                 failed=self._failed,
                 rejected=self._rejected,
+                middleware_lost=self._middleware_lost,
                 loops=self._loops,
                 pending=len(self._queue),
                 in_flight=self._in_flight,
@@ -424,10 +544,12 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                 last_frame_index=self._last_frame_index,
                 input_age_ms=input_age_ms,
                 last_queue_ms=self._last_queue_ms,
+                last_tf_lookup_ms=self._last_tf_lookup_ms,
                 last_conversion_ms=self._last_conversion_ms,
-                last_detector_ms=self._last_detector_ms,
+                last_inference_ms=self._last_inference_ms,
                 last_publish_ms=self._last_publish_ms,
                 last_end_to_end_ms=self._last_end_to_end_ms,
+                last_reset_reason=self._last_reset_reason,
                 last_error_stage=self._last_error_stage,
                 last_error_code=self._last_error_code,
                 last_error_message=self._last_error_message,
@@ -465,6 +587,12 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
         with self._condition:
             self._received += 1
             self._failed += 1
+            self._last_queue_ms = None
+            self._last_tf_lookup_ms = None
+            self._last_conversion_ms = None
+            self._last_inference_ms = None
+            self._last_publish_ms = None
+            self._last_end_to_end_ms = None
             self._last_input_monotonic_ns = self._clock_ns()
             if checked_timestamp_ns is not None:
                 self._last_input_timestamp_ns = checked_timestamp_ns
@@ -475,8 +603,8 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
             else:
                 self._set_error_locked("input", "input_failure", error)
 
-    def record_drop(self, count: int = 1, *, reason: str) -> None:
-        """Record externally observed message loss without inventing a frame."""
+    def record_middleware_loss(self, count: int = 1, *, reason: str) -> None:
+        """Record DDS loss separately from application queue disposition."""
 
         checked_count = _positive_integer(count, "count")
         if not isinstance(reason, str):
@@ -484,8 +612,8 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
         if not reason.strip():
             raise ValueError("reason must be non-empty")
         with self._condition:
-            self._dropped += checked_count
-            self._set_error_locked("drop", "external_drop", reason)
+            self._middleware_lost += checked_count
+            self._set_error_locked("middleware", "middleware_message_lost", reason)
 
     def wait_until_idle(self, timeout: float | None = None) -> bool:
         """Wait until there is neither queued nor in-flight work."""
@@ -561,66 +689,57 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
                         0.0,
                         (started_ns - item.received_monotonic_ns) / 1_000_000.0,
                     )
+                    self._last_tf_lookup_ms = None
+                    self._last_conversion_ms = None
+                    self._last_inference_ms = None
+                    self._last_publish_ms = None
+                    self._last_end_to_end_ms = None
 
-                process_started_ns = self._clock_ns()
                 try:
                     raw_result = self._process(item)
                 except Exception as exc:
                     process_finished_ns = self._clock_ns()
-                    with self._condition:
-                        self._last_detector_ms = max(
-                            0.0,
-                            (process_finished_ns - process_started_ns) / 1_000_000.0,
-                        )
-                        self._last_end_to_end_ms = max(
-                            0.0,
-                            (
-                                process_finished_ns
-                                - item.received_monotonic_ns
-                            )
-                            / 1_000_000.0,
-                        )
-                        self._failed += 1
-                        self._set_exception_locked("process", exc)
-                        self._in_flight = False
-                        self._condition.notify_all()
+                    with self._publication_gate:
+                        with self._condition:
+                            if item.generation != self._generation:
+                                self._dropped += 1
+                            else:
+                                self._apply_exception_timings_locked(exc)
+                                self._last_end_to_end_ms = max(
+                                    0.0,
+                                    (
+                                        process_finished_ns
+                                        - item.received_monotonic_ns
+                                    )
+                                    / 1_000_000.0,
+                                )
+                                self._failed += 1
+                                self._set_exception_locked("process", exc)
+                            self._in_flight = False
+                            self._condition.notify_all()
                     continue
-                process_finished_ns = self._clock_ns()
 
                 if isinstance(raw_result, ProcessingResult):
                     result = raw_result.value
+                    tf_lookup_ms = raw_result.tf_lookup_ms
                     conversion_ms = raw_result.conversion_ms
-                    detector_ms = raw_result.detector_ms
-                    if detector_ms is None:
-                        detector_ms = max(
-                            0.0,
-                            (process_finished_ns - process_started_ns)
-                            / 1_000_000.0,
-                        )
+                    inference_ms = raw_result.inference_ms
                 else:
                     result = cast(OutputT, raw_result)
+                    tf_lookup_ms = None
                     conversion_ms = None
-                    detector_ms = max(
-                        0.0,
-                        (process_finished_ns - process_started_ns) / 1_000_000.0,
-                    )
-
-                with self._condition:
-                    self._last_conversion_ms = conversion_ms
-                    self._last_detector_ms = detector_ms
+                    inference_ms = None
 
                 with self._publication_gate:
                     with self._condition:
                         if item.generation != self._generation:
                             self._dropped += 1
-                            self._last_end_to_end_ms = max(
-                                0.0,
-                                (self._clock_ns() - item.received_monotonic_ns)
-                                / 1_000_000.0,
-                            )
                             self._in_flight = False
                             self._condition.notify_all()
                             continue
+                        self._last_tf_lookup_ms = tf_lookup_ms
+                        self._last_conversion_ms = conversion_ms
+                        self._last_inference_ms = inference_ms
 
                     publish_started_ns = self._clock_ns()
                     try:
@@ -673,12 +792,25 @@ class ProcessingCoordinator(Generic[InputT, OutputT]):
             self._set_exception_locked(stage, exc)
 
     def _set_exception_locked(self, stage: str, exc: Exception) -> None:
+        exact_stage = getattr(exc, "stage", None)
+        if isinstance(exact_stage, str) and exact_stage:
+            stage = exact_stage
         evidence = getattr(exc, "evidence", None)
-        code = getattr(evidence, "code", None)
+        code = getattr(exc, "code", None)
+        if not isinstance(code, str) or not code:
+            code = getattr(evidence, "code", None)
         if not isinstance(code, str) or not code:
             code = type(exc).__name__
         message = str(exc) or repr(exc)
         self._set_error_locked(stage, code, message)
+
+    def _apply_exception_timings_locked(self, exc: Exception) -> None:
+        timings = getattr(exc, "timings", None)
+        if not isinstance(timings, ProcessingTimings):
+            return
+        self._last_tf_lookup_ms = timings.tf_lookup_ms
+        self._last_conversion_ms = timings.conversion_ms
+        self._last_inference_ms = timings.inference_ms
 
     def _set_error_locked(self, stage: str, code: str, message: str) -> None:
         self._last_error_stage = stage

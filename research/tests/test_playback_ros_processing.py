@@ -8,6 +8,8 @@ from lidar_model_selection.playback.ros_processing import (
     ProcessingCoordinator,
     ProcessingItem,
     ProcessingResult,
+    ProcessingStageError,
+    ProcessingTimings,
     ResetEvent,
 )
 
@@ -148,6 +150,7 @@ def test_nonincreasing_timestamp_resets_generation_and_suppresses_old_work() -> 
         assert loop_submission.frame_index == 0
         assert reset_events == [
             ResetEvent(
+                reason="point_timestamp",
                 previous_timestamp_ns=110,
                 timestamp_ns=100,
                 generation=1,
@@ -209,7 +212,7 @@ def test_process_and_publish_failures_are_diagnostic_and_worker_continues() -> N
         assert snapshot.failed == 2
         assert snapshot.last_error_stage == "publish"
         assert snapshot.last_error_code == "RuntimeError"
-        assert snapshot.last_detector_ms is not None
+        assert snapshot.last_inference_ms is None
         assert snapshot.last_publish_ms is not None
         assert snapshot.last_end_to_end_ms is not None
     finally:
@@ -226,8 +229,9 @@ def test_processing_result_preserves_stage_timings_and_snapshot_age() -> None:
     coordinator = ProcessingCoordinator(
         lambda item: ProcessingResult(
             value=item.payload.upper(),
+            tf_lookup_ms=0.75,
             conversion_ms=1.25,
-            detector_ms=8.5,
+            inference_ms=8.5,
         ),
         lambda _result: None,
         policy="all",
@@ -241,8 +245,9 @@ def test_processing_result_preserves_stage_timings_and_snapshot_age() -> None:
             now_ns += 5_000_000
         snapshot = coordinator.snapshot()
 
+        assert snapshot.last_tf_lookup_ms == 0.75
         assert snapshot.last_conversion_ms == 1.25
-        assert snapshot.last_detector_ms == 8.5
+        assert snapshot.last_inference_ms == 8.5
         assert snapshot.last_publish_ms == 0.0
         assert snapshot.last_queue_ms == 0.0
         assert snapshot.last_end_to_end_ms == 0.0
@@ -320,11 +325,12 @@ def test_external_failure_and_drop_seams_update_diagnostics() -> None:
         assert failed.last_input_timestamp_ns == 90
         assert failed.last_input_frame == "sensor"
 
-        coordinator.record_drop(3, reason="middleware sequence gap")
+        coordinator.record_middleware_loss(3, reason="middleware sequence gap")
         dropped = coordinator.snapshot()
-        assert dropped.dropped == 3
-        assert dropped.last_error_stage == "drop"
-        assert dropped.last_error_code == "external_drop"
+        assert dropped.dropped == 0
+        assert dropped.middleware_lost == 3
+        assert dropped.last_error_stage == "middleware"
+        assert dropped.last_error_code == "middleware_message_lost"
         assert dropped.last_error_message == "middleware sequence gap"
     finally:
         coordinator.close()
@@ -379,5 +385,127 @@ def test_reset_callback_failure_is_counted_without_losing_new_loop_input() -> No
         assert snapshot.processed == 2
         assert snapshot.failed == 1
         assert snapshot.last_error_stage == "reset"
+    finally:
+        coordinator.close()
+
+
+def test_backward_clock_jump_resets_once_before_first_new_loop_point() -> None:
+    resets: list[ResetEvent] = []
+    published: list[str] = []
+    coordinator = ProcessingCoordinator(
+        lambda item: item.payload,
+        published.append,
+        policy="all",
+        capacity=2,
+        reset=resets.append,
+    )
+    try:
+        coordinator.submit("old", timestamp_ns=100)
+        assert coordinator.wait_until_idle(2.0)
+
+        assert coordinator.reset_generation(reason="clock_jump", timestamp_ns=50)
+        submission = coordinator.submit("new", timestamp_ns=50)
+        assert submission.accepted
+        assert not submission.reset
+        assert submission.generation == 1
+        assert submission.frame_index == 0
+        assert coordinator.wait_until_idle(2.0)
+
+        assert published == ["old", "new"]
+        assert resets == [
+            ResetEvent(
+                reason="clock_jump",
+                previous_timestamp_ns=100,
+                timestamp_ns=50,
+                generation=1,
+                dropped_pending=0,
+            )
+        ]
+        assert coordinator.snapshot().loops == 1
+        assert coordinator.snapshot().last_reset_reason == "clock_jump"
+    finally:
+        coordinator.close()
+
+
+def test_point_timestamp_fallback_deduplicates_following_clock_jump() -> None:
+    resets: list[ResetEvent] = []
+    coordinator = ProcessingCoordinator(
+        lambda item: item.payload,
+        lambda _result: None,
+        policy="all",
+        capacity=2,
+        reset=resets.append,
+    )
+    try:
+        coordinator.submit("old", timestamp_ns=100)
+        assert coordinator.wait_until_idle(2.0)
+        fallback = coordinator.submit("new", timestamp_ns=50)
+        assert fallback.reset
+        assert not coordinator.reset_generation(
+            reason="clock_jump",
+            timestamp_ns=50,
+        )
+        assert coordinator.wait_until_idle(2.0)
+
+        assert len(resets) == 1
+        assert resets[0].reason == "point_timestamp"
+        assert coordinator.snapshot().generation == 1
+        assert coordinator.snapshot().loops == 1
+    finally:
+        coordinator.close()
+
+
+def test_tf_timeout_is_not_attributed_to_inference() -> None:
+    def process(_item: ProcessingItem[str]) -> str:
+        raise ProcessingStageError(
+            stage="tf_lookup",
+            code="missing_or_stale_tf",
+            message="source frame does not exist",
+            timings=ProcessingTimings(tf_lookup_ms=204.0),
+        )
+
+    coordinator = ProcessingCoordinator(
+        process,
+        lambda _result: None,
+        policy="all",
+        capacity=1,
+    )
+    try:
+        coordinator.submit("frame", timestamp_ns=1)
+        assert coordinator.wait_until_idle(2.0)
+        snapshot = coordinator.snapshot()
+        assert snapshot.failed == 1
+        assert snapshot.last_error_stage == "tf_lookup"
+        assert snapshot.last_error_code == "missing_or_stale_tf"
+        assert snapshot.last_tf_lookup_ms == 204.0
+        assert snapshot.last_conversion_ms is None
+        assert snapshot.last_inference_ms is None
+        assert snapshot.last_publish_ms is None
+        assert snapshot.last_end_to_end_ms is not None
+    finally:
+        coordinator.close()
+
+
+def test_processing_result_can_report_no_inference_for_empty_frame() -> None:
+    coordinator = ProcessingCoordinator(
+        lambda item: ProcessingResult(
+            item.payload,
+            tf_lookup_ms=0.1,
+            conversion_ms=1.0,
+            inference_ms=None,
+        ),
+        lambda _result: None,
+        policy="all",
+        capacity=1,
+    )
+    try:
+        coordinator.submit("empty", timestamp_ns=1)
+        assert coordinator.wait_until_idle(2.0)
+        snapshot = coordinator.snapshot()
+        assert snapshot.processed == 1
+        assert snapshot.last_tf_lookup_ms == 0.1
+        assert snapshot.last_conversion_ms == 1.0
+        assert snapshot.last_inference_ms is None
+        assert snapshot.last_publish_ms is not None
     finally:
         coordinator.close()

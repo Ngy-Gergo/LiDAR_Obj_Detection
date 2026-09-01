@@ -14,6 +14,7 @@ import threading
 from dataclasses import asdict, dataclass
 from math import isfinite
 from pathlib import Path
+from time import perf_counter
 from types import ModuleType
 from typing import Any, Callable, Sequence
 
@@ -27,6 +28,7 @@ from .formats.ros2_mcap import (
 from .model_registry import finalist_aliases
 from .normalization import KAPOSVAR_FEATURE_PROFILE
 from .ros_messages import RosMessageBuilder, RosMessageTypes
+from .ros_processing import ProcessingStageError, ProcessingTimings
 
 
 _CUDA_DEVICE = re.compile(r"cuda:[0-9]+\Z")
@@ -162,11 +164,14 @@ class _RosRuntime:
     Node: type
     Duration: type
     Time: type
+    JumpThreshold: type
     Buffer: type
     TransformListener: type
     TransformException: type[BaseException]
+    RCLError: type[BaseException]
+    ExternalShutdownException: type[BaseException]
+    SignalHandlerOptions: type
     PointCloud2: type
-    qos_profile_sensor_data: object
     QoSProfile: type
     QoSHistoryPolicy: type
     QoSReliabilityPolicy: type
@@ -183,8 +188,14 @@ def _load_ros_runtime() -> _RosRuntime:
         node_module = importlib.import_module("rclpy.node")
         duration_module = importlib.import_module("rclpy.duration")
         time_module = importlib.import_module("rclpy.time")
+        clock_module = importlib.import_module("rclpy.clock")
         qos_module = importlib.import_module("rclpy.qos")
         event_module = importlib.import_module("rclpy.qos_event")
+        executor_module = importlib.import_module("rclpy.executors")
+        implementation_module = importlib.import_module(
+            "rclpy.impl.implementation_singleton"
+        )
+        signals_module = importlib.import_module("rclpy.signals")
         tf2_ros = importlib.import_module("tf2_ros")
         sensor_msgs = importlib.import_module("sensor_msgs.msg")
         visualization_msgs = importlib.import_module("visualization_msgs.msg")
@@ -225,11 +236,14 @@ def _load_ros_runtime() -> _RosRuntime:
         Node=node_module.Node,
         Duration=duration_module.Duration,
         Time=time_module.Time,
+        JumpThreshold=clock_module.JumpThreshold,
         Buffer=tf2_ros.Buffer,
         TransformListener=tf2_ros.TransformListener,
         TransformException=tf2_ros.TransformException,
+        RCLError=implementation_module.rclpy_implementation.RCLError,
+        ExternalShutdownException=executor_module.ExternalShutdownException,
+        SignalHandlerOptions=signals_module.SignalHandlerOptions,
         PointCloud2=sensor_msgs.PointCloud2,
-        qos_profile_sensor_data=qos_module.qos_profile_sensor_data,
         QoSProfile=qos_module.QoSProfile,
         QoSHistoryPolicy=qos_module.QoSHistoryPolicy,
         QoSReliabilityPolicy=qos_module.QoSReliabilityPolicy,
@@ -271,14 +285,48 @@ def _qos(runtime: _RosRuntime, *, depth: int, reliable: bool, transient: bool) -
     )
 
 
+def _pointcloud_qos(
+    runtime: _RosRuntime,
+    *,
+    policy: str,
+    queue_capacity: int,
+) -> object:
+    """Match DDS acquisition depth to the explicit pending-work policy."""
+
+    if policy not in ("all", "latest"):
+        raise ValueError("policy must be 'all' or 'latest'")
+    if isinstance(queue_capacity, bool) or queue_capacity <= 0:
+        raise ValueError("queue_capacity must be a positive integer")
+    depth = queue_capacity if policy == "all" else 1
+    return _qos(runtime, depth=depth, reliable=False, transient=False)
+
+
+def _tf_static_qos(runtime: _RosRuntime) -> object:
+    """Retain the complete bounded static-transform replay history."""
+
+    return _qos(
+        runtime,
+        depth=100,
+        reliable=True,
+        transient=True,
+    )
+
+
+def _elapsed_ms(clock: Callable[[], float], started_at: float) -> float:
+    return max(0.0, (clock() - started_at) * 1000.0)
+
+
 def _lookup_calibration(
     runtime: _RosRuntime,
     buffer: object,
     message: object,
     config: RosNodeConfig,
-) -> object:
+    *,
+    clock: Callable[[], float] = perf_counter,
+) -> tuple[object, float]:
     """Resolve the exact-time sensor transform or fail without an overlay."""
 
+    started_at = clock()
     try:
         transform = buffer.lookup_transform(
             config.base_frame,
@@ -287,11 +335,24 @@ def _lookup_calibration(
             timeout=runtime.Duration(seconds=config.tf_timeout_seconds),
         )
     except runtime.TransformException as error:
-        raise RuntimeError(f"missing_or_stale_tf: {error}") from error
+        elapsed_ms = _elapsed_ms(clock, started_at)
+        raise ProcessingStageError(
+            stage="tf_lookup",
+            code="missing_or_stale_tf",
+            message=str(error) or repr(error),
+            timings=ProcessingTimings(tf_lookup_ms=elapsed_ms),
+        ) from error
     try:
-        return calibration_from_transform(transform)
+        calibration = calibration_from_transform(transform)
     except (TypeError, ValueError, AttributeError) as error:
-        raise RuntimeError(f"invalid_or_ambiguous_tf: {error}") from error
+        elapsed_ms = _elapsed_ms(clock, started_at)
+        raise ProcessingStageError(
+            stage="tf_lookup",
+            code="invalid_or_ambiguous_tf",
+            message=str(error) or repr(error),
+            timings=ProcessingTimings(tf_lookup_ms=elapsed_ms),
+        ) from error
+    return calibration, _elapsed_ms(clock, started_at)
 
 
 def _run_with_overlay_guard(
@@ -316,20 +377,20 @@ def _node_class(runtime: _RosRuntime) -> type:
             super().__init__(f"centerpoint_{config.model}")
             self._config = config
             self._closed = False
+            self._close_lock = threading.Lock()
             self._previous_detection_count = 0
             self._marker_lock = threading.RLock()
+            self._tf_lock = threading.RLock()
+            self._tf_buffer: object | None = None
+            self._tf_listener: object | None = None
+            self._clock_jump_handle: object | None = None
             self._builder = RosMessageBuilder(
                 runtime.message_types,
                 model_alias=config.model,
                 base_frame=config.base_frame,
             )
             self._detector = _build_detector(config, FinalistDetector)
-            self._tf_buffer = runtime.Buffer()
-            self._tf_listener = runtime.TransformListener(
-                self._tf_buffer,
-                self,
-                spin_thread=False,
-            )
+            self._replace_tf_state()
 
             detection_qos = _qos(runtime, depth=1, reliable=True, transient=False)
             marker_qos = _qos(runtime, depth=1, reliable=True, transient=True)
@@ -359,7 +420,10 @@ def _node_class(runtime: _RosRuntime) -> type:
                 if config.publish_model_cloud
                 else None
             )
-            self._clear_markers(self.get_clock().now().to_msg())
+            self._clear_markers(
+                self.get_clock().now().to_msg(),
+                reason="startup",
+            )
 
             close_detector = getattr(self._detector, "close", None)
             self._coordinator = ProcessingCoordinator(
@@ -371,15 +435,29 @@ def _node_class(runtime: _RosRuntime) -> type:
                 close=close_detector if callable(close_detector) else None,
                 thread_name=f"centerpoint-{config.model}-worker",
             )
+            jump_threshold = runtime.JumpThreshold(
+                min_forward=None,
+                min_backward=runtime.Duration(nanoseconds=-1),
+                on_clock_change=False,
+            )
+            self._clock_jump_handle = self.get_clock().create_jump_callback(
+                jump_threshold,
+                post_callback=self._clock_jump,
+            )
             event_callbacks = runtime.SubscriptionEventCallbacks(
                 message_lost=self._message_lost,
                 incompatible_qos=self._incompatible_qos,
+            )
+            input_qos = _pointcloud_qos(
+                runtime,
+                policy=config.processing_policy,
+                queue_capacity=config.queue_capacity,
             )
             self._subscription = self.create_subscription(
                 runtime.PointCloud2,
                 config.input_topic,
                 self._point_cloud_callback,
-                runtime.qos_profile_sensor_data,
+                input_qos,
                 event_callbacks=event_callbacks,
             )
             self._diagnostic_timer = self.create_timer(
@@ -391,8 +469,86 @@ def _node_class(runtime: _RosRuntime) -> type:
                 f"ready model={config.model} run_id={identity.run_id} "
                 f"checkpoint_sha256={identity.checkpoint_sha256} "
                 f"device={config.device} policy={config.processing_policy} "
-                f"queue_capacity={config.queue_capacity}"
+                f"queue_capacity={config.queue_capacity} "
+                f"subscription_depth={input_qos.depth}"
             )
+
+        def _context_valid(self) -> bool:
+            return bool(runtime.rclpy.ok(context=self.context))
+
+        def _publish_message(
+            self,
+            publisher: object,
+            message: object,
+            *,
+            description: str,
+        ) -> bool:
+            if not self._context_valid():
+                self.get_logger().warning(
+                    f"skipped {description}: ROS context is not valid"
+                )
+                return False
+            try:
+                publisher.publish(message)
+            except runtime.RCLError:
+                if not self._context_valid():
+                    self.get_logger().warning(
+                        f"skipped {description}: ROS context became invalid"
+                    )
+                    return False
+                raise
+            return True
+
+        def _replace_tf_state(self) -> None:
+            """Re-subscribe TF so no later-timeline samples survive a rewind."""
+
+            with self._tf_lock:
+                previous_listener = self._tf_listener
+                self._tf_listener = None
+                self._tf_buffer = None
+            if previous_listener is not None:
+                unregister = getattr(previous_listener, "unregister", None)
+                if callable(unregister):
+                    unregister()
+
+            new_buffer = runtime.Buffer()
+            new_listener = runtime.TransformListener(
+                new_buffer,
+                self,
+                spin_thread=False,
+                static_qos=_tf_static_qos(runtime),
+            )
+            with self._tf_lock:
+                self._tf_buffer = new_buffer
+                self._tf_listener = new_listener
+
+        def _current_tf_buffer(self) -> object:
+            with self._tf_lock:
+                buffer = self._tf_buffer
+            if buffer is None:
+                raise ProcessingStageError(
+                    stage="tf_lookup",
+                    code="tf_reset_in_progress",
+                    message="TF state is being reset for a new playback timeline",
+                )
+            return buffer
+
+        def _clock_jump(self, jump: object) -> None:
+            delta = getattr(getattr(jump, "delta", None), "nanoseconds", None)
+            if not isinstance(delta, int) or delta >= 0:
+                return
+            with self._close_lock:
+                if self._closed:
+                    return
+            now_ns = int(self.get_clock().now().nanoseconds)
+            created = self._coordinator.reset_generation(
+                reason="clock_jump",
+                timestamp_ns=now_ns if now_ns > 0 else None,
+            )
+            if not created:
+                self.get_logger().debug(
+                    "backward clock jump matched an existing point-timestamp reset"
+                )
 
         def _point_cloud_callback(self, message: object) -> None:
             try:
@@ -409,7 +565,10 @@ def _node_class(runtime: _RosRuntime) -> type:
                     f"invalid_header_timestamp: {error}",
                     input_frame=input_frame,
                 )
-                self._clear_markers(self.get_clock().now().to_msg())
+                self._clear_markers(
+                    self.get_clock().now().to_msg(),
+                    reason="invalid input timestamp",
+                )
                 self.get_logger().error(f"rejected PointCloud2: {error}")
                 return
             input_frame = getattr(message.header, "frame_id", None)
@@ -421,7 +580,10 @@ def _node_class(runtime: _RosRuntime) -> type:
                 input_frame=input_frame,
             )
             if not submission.accepted:
-                self._clear_markers(message.header.stamp)
+                self._clear_markers(
+                    message.header.stamp,
+                    reason="application queue rejection",
+                )
                 self.get_logger().error(
                     f"PointCloud2 not queued: {submission.reason}; "
                     f"policy={self._config.processing_policy}"
@@ -432,30 +594,67 @@ def _node_class(runtime: _RosRuntime) -> type:
             stamp = message.header.stamp
 
             def process() -> object:
-                calibration = _lookup_calibration(
+                calibration, tf_lookup_ms = _lookup_calibration(
                     runtime,
-                    self._tf_buffer,
+                    self._current_tf_buffer(),
                     message,
                     self._config,
                 )
-                frame = pointcloud2_to_frame(
-                    message,
-                    session_id=f"live:{self._config.input_topic}",
-                    frame_index=item.frame_index,
-                    calibration=calibration,
-                    feature_profile=self._config.feature_profile,
-                    source_key=f"{self._config.input_topic}[{item.frame_index}]",
+                conversion_started_at = perf_counter()
+                try:
+                    frame = pointcloud2_to_frame(
+                        message,
+                        session_id=f"live:{self._config.input_topic}",
+                        frame_index=item.frame_index,
+                        calibration=calibration,
+                        feature_profile=self._config.feature_profile,
+                        source_key=f"{self._config.input_topic}[{item.frame_index}]",
+                    )
+                except Exception as error:
+                    evidence = getattr(error, "evidence", None)
+                    code = getattr(evidence, "code", None)
+                    if not isinstance(code, str) or not code:
+                        code = type(error).__name__
+                    conversion_ms = getattr(evidence, "decode_ms", None)
+                    if not isinstance(conversion_ms, (int, float)):
+                        conversion_ms = _elapsed_ms(
+                            perf_counter,
+                            conversion_started_at,
+                        )
+                    raise ProcessingStageError(
+                        stage="conversion",
+                        code=code,
+                        message=str(error) or repr(error),
+                        timings=ProcessingTimings(
+                            tf_lookup_ms=tf_lookup_ms,
+                            conversion_ms=float(conversion_ms),
+                        ),
+                    ) from error
+                try:
+                    result = self._detector.detect(frame)
+                except Exception as error:
+                    raise ProcessingStageError(
+                        stage="inference",
+                        code=type(error).__name__,
+                        message=str(error) or repr(error),
+                        timings=ProcessingTimings(
+                            tf_lookup_ms=tf_lookup_ms,
+                            conversion_ms=frame.decode_ms,
+                        ),
+                    ) from error
+                inference_ms = (
+                    result.detector_ms if result.status == "success" else None
                 )
-                result = self._detector.detect(frame)
                 return ProcessingResult(
                     _PublishedFrame(message, frame, result, calibration),
+                    tf_lookup_ms=tf_lookup_ms,
                     conversion_ms=frame.decode_ms,
-                    detector_ms=result.detector_ms,
+                    inference_ms=inference_ms,
                 )
 
             return _run_with_overlay_guard(
                 process,
-                lambda: self._clear_markers(stamp),
+                lambda: self._clear_markers(stamp, reason="processing failure"),
             )
 
         def _publish_frame(self, product: _PublishedFrame) -> None:
@@ -483,32 +682,59 @@ def _node_class(runtime: _RosRuntime) -> type:
                         if self._model_cloud_publisher is not None
                         else None
                     )
-                    self._detections_publisher.publish(detections)
-                    self._markers_publisher.publish(markers)
-                    if model_cloud is not None:
-                        self._model_cloud_publisher.publish(model_cloud)
+                    published = self._publish_message(
+                        self._detections_publisher,
+                        detections,
+                        description="detection array publication",
+                    )
+                    published = self._publish_message(
+                        self._markers_publisher,
+                        markers,
+                        description="marker array publication",
+                    ) and published
+                    if model_cloud is not None and self._model_cloud_publisher is not None:
+                        published = self._publish_message(
+                            self._model_cloud_publisher,
+                            model_cloud,
+                            description="model cloud publication",
+                        ) and published
+                    if not published:
+                        raise ProcessingStageError(
+                            stage="publication",
+                            code="context_invalid",
+                            message="ROS context became invalid before frame publication completed",
+                        )
                     self._previous_detection_count = (
                         product.detections.detection_count
                     )
 
             _run_with_overlay_guard(
                 publish,
-                lambda: self._clear_markers(stamp),
+                lambda: self._clear_markers(stamp, reason="publication failure"),
             )
 
-        def _clear_markers(self, stamp: object) -> None:
+        def _clear_markers(self, stamp: object, *, reason: str) -> bool:
             with self._marker_lock:
                 self._previous_detection_count = 0
-                self._markers_publisher.publish(
-                    self._builder.clear_markers(stamp=stamp)
+                return self._publish_message(
+                    self._markers_publisher,
+                    self._builder.clear_markers(stamp=stamp),
+                    description=f"marker DELETEALL ({reason})",
                 )
 
         def _reset_sequence(self, event: object) -> None:
-            stamp = _stamp_from_ns(runtime.message_types, event.timestamp_ns)
-            self._clear_markers(stamp)
+            stamp = (
+                _stamp_from_ns(runtime.message_types, event.timestamp_ns)
+                if event.timestamp_ns is not None
+                else self.get_clock().now().to_msg()
+            )
+            try:
+                self._replace_tf_state()
+            finally:
+                self._clear_markers(stamp, reason=f"{event.reason} reset")
             self.get_logger().info(
-                f"timestamp reset generation={event.generation} "
-                f"timestamp_ns={event.timestamp_ns}; pending frames and markers cleared"
+                f"playback reset reason={event.reason} generation={event.generation} "
+                f"timestamp_ns={event.timestamp_ns}; pending frames, TF state, and markers cleared"
             )
 
         def _identity_values(self) -> dict[str, object]:
@@ -538,10 +764,14 @@ def _node_class(runtime: _RosRuntime) -> type:
                 "dropped_frames": snapshot["dropped"],
                 "failed_frames": snapshot["failed"],
                 "rejected_frames": snapshot["rejected"],
+                "middleware_lost_frames": snapshot["middleware_lost"],
                 "loop_reset_count": snapshot["loops"],
+                "last_reset_reason": snapshot["last_reset_reason"],
+                "queue_ms": snapshot["last_queue_ms"],
+                "tf_lookup_ms": snapshot["last_tf_lookup_ms"],
                 "conversion_ms": snapshot["last_conversion_ms"],
-                "detector_ms": snapshot["last_detector_ms"],
-                "publish_ms": snapshot["last_publish_ms"],
+                "inference_ms": snapshot["last_inference_ms"],
+                "publication_ms": snapshot["last_publish_ms"],
                 "end_to_end_ms": snapshot["last_end_to_end_ms"],
                 "last_error": ": ".join(
                     str(part)
@@ -561,7 +791,12 @@ def _node_class(runtime: _RosRuntime) -> type:
                 values,
                 stamp=self.get_clock().now().to_msg(),
             )
-            self._diagnostics_publisher.publish(message)
+            if not self._publish_message(
+                self._diagnostics_publisher,
+                message,
+                description="diagnostic publication",
+            ):
+                return
             self.get_logger().info(
                 "diagnostics "
                 f"model={values['model_alias']} run_id={values['run_id']} "
@@ -572,40 +807,79 @@ def _node_class(runtime: _RosRuntime) -> type:
                 f"received={values['received_frames']} "
                 f"processed={values['processed_frames']} "
                 f"dropped={values['dropped_frames']} "
+                f"rejected={values['rejected_frames']} "
+                f"middleware_lost={values['middleware_lost_frames']} "
                 f"failed={values['failed_frames']} loops={values['loop_reset_count']} "
+                f"queue_ms={values['queue_ms']} "
+                f"tf_lookup_ms={values['tf_lookup_ms']} "
                 f"conversion_ms={values['conversion_ms']} "
-                f"detector_ms={values['detector_ms']} "
-                f"publish_ms={values['publish_ms']} "
+                f"inference_ms={values['inference_ms']} "
+                f"publication_ms={values['publication_ms']} "
                 f"message_age_ms={values['message_age_ms']} "
                 f"last_error={values['last_error'] or 'none'}"
             )
 
         def _message_lost(self, event: object) -> None:
             count = max(1, int(getattr(event, "total_count_change", 1)))
-            self._coordinator.record_drop(count, reason="middleware_message_lost")
-            self._clear_markers(self.get_clock().now().to_msg())
+            self._coordinator.record_middleware_loss(
+                count,
+                reason="middleware reported PointCloud2 loss",
+            )
+            self._clear_markers(
+                self.get_clock().now().to_msg(),
+                reason="middleware message loss",
+            )
             self.get_logger().error(f"middleware reported {count} lost PointCloud2 message(s)")
 
         def _incompatible_qos(self, event: object) -> None:
             self._coordinator.record_failure(
                 f"incompatible_input_qos: policy_kind={getattr(event, 'last_policy_kind', 'unknown')}"
             )
-            self._clear_markers(self.get_clock().now().to_msg())
+            self._clear_markers(
+                self.get_clock().now().to_msg(),
+                reason="incompatible input QoS",
+            )
             self.get_logger().error("input subscription has incompatible QoS")
 
         def close(self) -> None:
-            if self._closed:
-                return
-            self._closed = True
+            with self._close_lock:
+                if self._closed:
+                    return
+                self._closed = True
+            context_valid = self._context_valid()
+            jump_handle = self._clock_jump_handle
+            self._clock_jump_handle = None
+            if context_valid and jump_handle is not None:
+                unregister_jump = getattr(jump_handle, "unregister", None)
+                if callable(unregister_jump):
+                    unregister_jump()
             try:
                 self._coordinator.close(drain=False)
             finally:
                 try:
-                    self._clear_markers(self.get_clock().now().to_msg())
+                    shutdown_stamp = (
+                        self.get_clock().now().to_msg()
+                        if self._context_valid()
+                        else _stamp_from_ns(runtime.message_types, 0)
+                    )
+                    self._clear_markers(
+                        shutdown_stamp,
+                        reason="shutdown",
+                    )
                 finally:
-                    unregister = getattr(self._tf_listener, "unregister", None)
-                    if callable(unregister):
-                        unregister()
+                    with self._tf_lock:
+                        listener = self._tf_listener
+                        self._tf_listener = None
+                        self._tf_buffer = None
+                    if self._context_valid() and listener is not None:
+                        unregister = getattr(listener, "unregister", None)
+                        if callable(unregister):
+                            unregister()
+                    elif listener is not None:
+                        self.get_logger().warning(
+                            "skipped explicit TF listener unregister: "
+                            "ROS context is not valid"
+                        )
 
     return CenterPointDetectionNode
 
@@ -613,11 +887,18 @@ def _node_class(runtime: _RosRuntime) -> type:
 def main(args: Sequence[str] | None = None) -> None:
     config, ros_args = _parse_arguments(args)
     runtime = _load_ros_runtime()
-    runtime.rclpy.init(args=ros_args)
+    runtime.rclpy.init(
+        args=ros_args,
+        signal_handler_options=runtime.SignalHandlerOptions.NO,
+    )
     node: Any | None = None
     try:
         node = _node_class(runtime)(config)
         runtime.rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    except runtime.ExternalShutdownException:
+        pass
     finally:
         try:
             if node is not None:
@@ -626,8 +907,7 @@ def main(args: Sequence[str] | None = None) -> None:
                 finally:
                     node.destroy_node()
         finally:
-            if runtime.rclpy.ok():
-                runtime.rclpy.shutdown()
+            runtime.rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
