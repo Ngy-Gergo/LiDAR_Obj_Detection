@@ -63,3 +63,54 @@ class DirectoryFrameSource:
         )
         selected_paths = matching_paths if limit is None else matching_paths[:limit]
         return tuple(LidarFrame(path.stem, path) for path in selected_paths)
+
+
+def resolve_session_directory(recording_root: Path, session_id: str) -> Path:
+    """Resolve one exact, non-symlinked immediate recording-root child."""
+
+    if not isinstance(recording_root, Path):
+        raise TypeError("recording_root must be a pathlib.Path")
+    if not recording_root.is_absolute():
+        raise ValueError("recording_root must be an absolute path")
+    if not recording_root.exists():
+        raise FileNotFoundError(f"recording root does not exist: {recording_root}")
+    if not recording_root.is_dir():
+        raise NotADirectoryError(
+            f"recording root is not a directory: {recording_root}"
+        )
+    if not isinstance(session_id, str):
+        raise TypeError("session_id must be a string")
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id must contain non-whitespace text")
+
+    session_component = Path(session_id)
+    if (
+        session_component.is_absolute()
+        or session_component.name != session_id
+        or session_id in {".", ".."}
+    ):
+        raise ValueError(
+            "session_id must be one exact immediate directory basename"
+        )
+
+    root = recording_root.resolve(strict=True)
+    matches = tuple(entry for entry in recording_root.iterdir() if entry.name == session_id)
+    if not matches:
+        raise FileNotFoundError(
+            f"session is not an immediate recording-root child: {session_id}"
+        )
+    if len(matches) != 1:
+        raise ValueError(f"session name is ambiguous: {session_id}")
+
+    candidate = matches[0]
+    if candidate.is_symlink():
+        raise ValueError(f"session directory must not be a symbolic link: {candidate}")
+    if not candidate.is_dir():
+        raise NotADirectoryError(f"session path is not a directory: {candidate}")
+
+    resolved = candidate.resolve(strict=True)
+    if resolved.parent != root or resolved.name != session_id:
+        raise ValueError(
+            "session must resolve to the named immediate recording-root child"
+        )
+    return resolved

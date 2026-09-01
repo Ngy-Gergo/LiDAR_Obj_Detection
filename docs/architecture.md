@@ -34,6 +34,11 @@ The existing ROS 2 playback node remains here because it reads recorded KITTI
 files and reconstructs a model from a training configuration and checkpoint.
 It is an experiment tool, not the vehicle runtime.
 
+The ROS-node-independent Kaposvár MCAP research path is documented in
+[`playback.md`](playback.md). It streams one session through immutable point
+and detection contracts, while ROS2 publication remains outside this
+milestone.
+
 ## Artifact boundary
 
 `artifacts/` is the only model hand-off between research and runtime. Binary
