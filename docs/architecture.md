@@ -30,14 +30,13 @@ immutable results; `training.py` MMEngine training; `evaluation.py` and
 `pipeline.py` one ordinary experiment orchestration. Command-line tools remain
 thin callers of these package functions.
 
-The existing ROS 2 playback node remains here because it reads recorded KITTI
-files and reconstructs a model from a training configuration and checkpoint.
-It is an experiment tool, not the vehicle runtime.
-
-The ROS-node-independent Kaposvár MCAP research path is documented in
+The Kaposvár MCAP research path is documented in
 [`playback.md`](playback.md). It streams one session through immutable point
-and detection contracts, while ROS2 publication remains outside this
-milestone.
+and detection contracts. A thin, one-model-per-process research adapter wraps
+that same core for ROS2 bag playback and standard-message Foxglove inspection;
+its operational contract is documented in
+[`foxglove_playback.md`](foxglove_playback.md). It is an acceptance and
+presentation tool, not the vehicle runtime.
 
 ## Artifact boundary
 

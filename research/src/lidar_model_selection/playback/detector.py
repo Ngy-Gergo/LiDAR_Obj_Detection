@@ -18,8 +18,8 @@ from ..results import ResultBinding, binding_for_run
 from ..runs import Run, load_run
 from .frame_source import LidarFrame
 from .model_registry import (
-    FINALIST_POINT_CLOUD_RANGE,
     FinalistModelIdentity,
+    finalist_range_mask,
     resolve_finalist,
 )
 from .normalization import DETECTOR_COORDINATE_FRAME, KAPOSVAR_FEATURE_PROFILE
@@ -408,6 +408,7 @@ class FinalistDetector:
         self._model = model
         self._model_device = model_device
         self._call_lock = threading.Lock()
+        self._closed = False
 
     @property
     def identity(self) -> FinalistModelIdentity:
@@ -495,6 +496,8 @@ class FinalistDetector:
         if not self._call_lock.acquire(blocking=False):
             raise RuntimeError("concurrent finalist detector calls are not supported")
         try:
+            if self._closed:
+                raise RuntimeError("finalist detector is closed")
             if self._model_device.type == "cuda":
                 self._torch.cuda.synchronize(self._model_device)
             start_time = perf_counter()
@@ -584,17 +587,7 @@ class FinalistDetector:
                     labels=labels,
                 )
 
-            x_min, y_min, z_min, x_max, y_max, z_max = (
-                FINALIST_POINT_CLOUD_RANGE
-            )
-            in_range = (
-                (points[:, 0] > x_min)
-                & (points[:, 1] > y_min)
-                & (points[:, 2] > z_min)
-                & (points[:, 0] < x_max)
-                & (points[:, 1] < y_max)
-                & (points[:, 2] < z_max)
-            )
+            in_range = finalist_range_mask(points)
             in_range_count = int(np.count_nonzero(in_range))
             if in_range_count == 0:
                 boxes, scores, labels = empty_detection_arrays()
@@ -628,3 +621,12 @@ class FinalistDetector:
             )
         finally:
             self._call_lock.release()
+
+    def close(self) -> None:
+        """Release the model reference after the single worker has stopped."""
+
+        with self._call_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._model = None

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+import numpy as np
+
 from ..checkpoints import verify_checkpoint
 from ..results import ResultBinding, binding_for_run
 from ..runs import Run, load_run
@@ -33,6 +35,28 @@ _FINALIST_CHECKPOINTS = MappingProxyType(
 # Both protected finalists use this exact inference range. The canonical
 # MMDetection3D PointsRangeFilter applies strict inequalities at all six faces.
 FINALIST_POINT_CLOUD_RANGE = (0.0, -38.4, -3.0, 67.2, 38.4, 1.0)
+
+
+def finalist_range_mask(points: np.ndarray) -> np.ndarray:
+    """Return the canonical strict MMDetection3D range-filter mask."""
+
+    values = np.asarray(points)
+    if values.ndim != 2 or values.shape[1] < 3:
+        raise ValueError("points must have shape (N, M) with at least XYZ columns")
+    if not np.issubdtype(values.dtype, np.number):
+        raise TypeError("points must contain numeric values")
+    x_min, y_min, z_min, x_max, y_max, z_max = FINALIST_POINT_CLOUD_RANGE
+    mask = np.asarray(
+        (values[:, 0] > x_min)
+        & (values[:, 1] > y_min)
+        & (values[:, 2] > z_min)
+        & (values[:, 0] < x_max)
+        & (values[:, 1] < y_max)
+        & (values[:, 2] < z_max),
+        dtype=np.bool_,
+    )
+    mask.setflags(write=False)
+    return mask
 
 
 @dataclass(frozen=True, slots=True)

@@ -413,6 +413,53 @@ def _calibration_values(transform: object) -> tuple[np.ndarray, np.ndarray]:
     return translation_values, quaternion
 
 
+def _validated_sensor_to_base_calibration(
+    translation: np.ndarray,
+    quaternion: np.ndarray,
+) -> SessionCalibration:
+    if not np.allclose(
+        translation,
+        np.asarray(EXPECTED_TRANSLATION_XYZ),
+        atol=CALIBRATION_TRANSLATION_ATOL,
+        rtol=0.0,
+    ):
+        raise ValueError(
+            f"recorded translation differs from {EXPECTED_TRANSLATION_XYZ}"
+        )
+    if not np.allclose(
+        quaternion,
+        np.asarray(EXPECTED_QUATERNION_XYZW),
+        atol=CALIBRATION_QUATERNION_ATOL,
+        rtol=0.0,
+    ):
+        raise ValueError(
+            f"recorded rotation differs from {EXPECTED_QUATERNION_XYZW}"
+        )
+    return SessionCalibration(
+        parent_frame_id=BASE_FRAME,
+        child_frame_id=SENSOR_FRAME,
+        translation_xyz=tuple(float(value) for value in translation),
+        quaternion_xyzw=tuple(float(value) for value in quaternion),
+        rotation_matrix=_quaternion_to_rotation(quaternion),
+    )
+
+
+def calibration_from_transform(transform: object) -> SessionCalibration:
+    """Validate one live ``TransformStamped`` against recorded evidence."""
+
+    try:
+        parent = transform.header.frame_id
+        child = transform.child_frame_id
+    except AttributeError as error:
+        raise ValueError("transform is missing parent or child frame identity") from error
+    if parent != BASE_FRAME or child != SENSOR_FRAME:
+        raise ValueError(
+            f"transform must be exactly {BASE_FRAME} <- {SENSOR_FRAME}"
+        )
+    translation, quaternion = _calibration_values(transform)
+    return _validated_sensor_to_base_calibration(translation, quaternion)
+
+
 def _resolve_calibration(
     session_directory: Path,
     session_id: str,
@@ -478,40 +525,22 @@ def _resolve_calibration(
                 "recorded static transforms disagree",
             )
 
-    if not np.allclose(
-        first_translation,
-        np.asarray(EXPECTED_TRANSLATION_XYZ),
-        atol=CALIBRATION_TRANSLATION_ATOL,
-        rtol=0.0,
-    ):
+    try:
+        return _validated_sensor_to_base_calibration(
+            first_translation,
+            first_quaternion,
+        )
+    except ValueError as error:
         raise _session_error(
             session_id,
             "unexpected_calibration",
-            f"recorded translation differs from {EXPECTED_TRANSLATION_XYZ}",
-        )
-    if not np.allclose(
-        first_quaternion,
-        np.asarray(EXPECTED_QUATERNION_XYZW),
-        atol=CALIBRATION_QUATERNION_ATOL,
-        rtol=0.0,
-    ):
-        raise _session_error(
-            session_id,
-            "unexpected_calibration",
-            f"recorded rotation differs from {EXPECTED_QUATERNION_XYZW}",
-        )
-
-    quaternion_tuple = tuple(float(value) for value in first_quaternion)
-    return SessionCalibration(
-        parent_frame_id=BASE_FRAME,
-        child_frame_id=SENSOR_FRAME,
-        translation_xyz=tuple(float(value) for value in first_translation),
-        quaternion_xyzw=quaternion_tuple,
-        rotation_matrix=_quaternion_to_rotation(first_quaternion),
-    )
+            str(error),
+        ) from error
 
 
-def _header_timestamp(message: object) -> int:
+def pointcloud_header_timestamp(message: object) -> int:
+    """Return a validated positive nanosecond PointCloud2 header stamp."""
+
     try:
         stamp = message.header.stamp
         sec = stamp.sec
@@ -543,6 +572,89 @@ def _header_timestamp(message: object) -> int:
             "PointCloud2 header timestamp must be greater than zero",
         )
     return timestamp
+
+
+def pointcloud2_to_frame(
+    message: object,
+    *,
+    session_id: str,
+    frame_index: int,
+    calibration: SessionCalibration,
+    feature_profile: str = KAPOSVAR_FEATURE_PROFILE,
+    source_key: str = POINT_TOPIC,
+    clock: Callable[[], float] = perf_counter,
+) -> PointCloudFrame:
+    """Convert one live PointCloud2 using the canonical MCAP schema contract.
+
+    A live ROS subscription has no MCAP storage timestamp, so that evidence is
+    intentionally ``None`` rather than copied from the acquisition stamp.
+    """
+
+    started_at = clock()
+    header_timestamp_ns: int | None = None
+    if not isinstance(calibration, SessionCalibration):
+        raise TypeError("calibration must be a SessionCalibration")
+    if (
+        calibration.parent_frame_id != BASE_FRAME
+        or calibration.child_frame_id != SENSOR_FRAME
+    ):
+        raise ValueError("calibration frame identity is incompatible")
+    try:
+        header_timestamp_ns = pointcloud_header_timestamp(message)
+        payload = _validate_point_cloud(message, header_timestamp_ns)
+        try:
+            normalized = normalize_points(
+                feature_profile,
+                payload,
+                point_count=int(message.width),
+                point_step=POINT_STEP,
+                rotation_matrix=calibration.rotation_matrix,
+            )
+        except Exception as error:
+            raise _FrameValidationFailure(
+                "normalization_failed",
+                f"could not normalize PointCloud2: {error}",
+                header_timestamp_ns=header_timestamp_ns,
+            ) from error
+        frame = PointCloudFrame(
+            session_id=session_id,
+            frame_index=frame_index,
+            timestamp_ns=header_timestamp_ns,
+            storage_timestamp_ns=None,
+            source_frame_id=SENSOR_FRAME,
+            coordinate_frame=DETECTOR_COORDINATE_FRAME,
+            source_key=source_key,
+            points=normalized.points,
+            source_point_count=normalized.source_point_count,
+            dropped_nonfinite_count=normalized.dropped_nonfinite_count,
+            feature_profile=feature_profile,
+            decode_ms=0.0,
+        )
+        object.__setattr__(
+            frame,
+            "decode_ms",
+            max(0.0, (clock() - started_at) * 1000.0),
+        )
+        return frame
+    except _FrameValidationFailure as error:
+        elapsed_ms = max(0.0, (clock() - started_at) * 1000.0)
+        raise FrameSourceError(
+            FrameErrorEvidence(
+                code=error.code,
+                message=str(error),
+                session_id=session_id,
+                frame_index=frame_index,
+                header_timestamp_ns=(
+                    error.header_timestamp_ns
+                    if error.header_timestamp_ns is not None
+                    else header_timestamp_ns
+                ),
+                storage_timestamp_ns=None,
+                source_key=source_key,
+                recoverable=True,
+                decode_ms=elapsed_ms,
+            )
+        ) from error
 
 
 def _validate_fields(fields: object, header_timestamp_ns: int) -> None:
@@ -810,7 +922,7 @@ class _McapFrameIterator:
                         "cdr_deserialization_failed",
                         f"could not deserialize PointCloud2: {error}",
                     ) from error
-                header_timestamp_ns = _header_timestamp(message)
+                header_timestamp_ns = pointcloud_header_timestamp(message)
                 if (
                     self._previous_header_timestamp_ns is not None
                     and header_timestamp_ns <= self._previous_header_timestamp_ns

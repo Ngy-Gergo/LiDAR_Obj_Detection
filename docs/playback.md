@@ -6,8 +6,10 @@ The research package has two explicit, non-interchangeable playback modes:
 - Legacy packed float32 `x/y/z/feature` files selected with `--input-dir` and
   `--run`.
 
-The MCAP path is a non-ROS-node research demonstration. It does not publish
-ROS messages, track objects, retain temporal state, or create output files.
+The offline MCAP path does not publish ROS messages, track objects, retain
+temporal state, or create output files. The separate thin live ROS2 adapter is
+documented in [`foxglove_playback.md`](foxglove_playback.md); it consumes the
+same canonical normalization, finalist detector, and box geometry.
 
 ## Runtime prerequisites
 
@@ -177,7 +179,7 @@ source /opt/ros/humble/setup.bash
 ```
 
 Model execution and visual semantic acceptance must be performed from that
-GPU-capable host terminal. This milestone does not establish tracking,
-motion compensation, ROS2 publication/RViz behavior, TensorRT parity,
-NuScenes performance, or equivalence between Ouster reflectivity and KITTI
-reflectance.
+GPU-capable host terminal. The ROS2/Foxglove stage publishes frame-local
+detections but does not establish tracking, motion compensation, TensorRT
+parity, NuScenes performance, or equivalence between Ouster reflectivity and
+KITTI reflectance.

@@ -375,7 +375,7 @@ def test_compatibility_cli_exposes_self_test_alone() -> None:
             sys.modules.pop("numpy", None)
 
 
-def test_ros_parameters_and_python310_grammar_are_run_owned() -> None:
+def test_ros_cli_and_python310_grammar_are_run_owned() -> None:
     paths = (
         Path(detector_module.__file__),
         Path(playback_cli.__file__),
@@ -386,7 +386,9 @@ def test_ros_parameters_and_python310_grammar_are_run_owned() -> None:
         ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 10))
 
     ros_source = paths[2].read_text(encoding="utf-8")
-    assert 'declare_parameter("run_id"' in ros_source
-    assert '"runs_root"' in ros_source
+    assert 'parser.add_argument("--model", required=True' in ros_source
+    assert 'parser.add_argument("--runs-root", required=True' in ros_source
+    assert "_build_detector(config, FinalistDetector)" in ros_source
+    assert "import rclpy\n" not in ros_source
     assert '"config_path"' not in ros_source
     assert '"checkpoint_path"' not in ros_source

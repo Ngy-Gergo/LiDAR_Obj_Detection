@@ -403,6 +403,20 @@ def test_one_initialized_finalist_model_is_reused_serially(
     assert events.count("infer") == 2
 
 
+def test_finalist_detector_close_is_idempotent_and_rejects_future_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    detector = _build_detector(tmp_path, monkeypatch, events)
+    detector.close()
+    detector.close()
+
+    assert detector._model is None
+    with pytest.raises(RuntimeError, match="detector is closed"):
+        detector.detect(_frame(np.array([[1.0, 0.0, 0.0, 0.2]], np.float32)))
+
+
 def test_detector_rejects_incompatible_feature_identity_before_inference(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

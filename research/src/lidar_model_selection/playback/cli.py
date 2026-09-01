@@ -16,7 +16,7 @@ from .contracts import FrameErrorEvidence, FrameSourceError
 from .detector import FinalistDetector, Mmdet3dDetector
 from .frame_source import resolve_session_directory
 from .model_registry import (
-    FINALIST_POINT_CLOUD_RANGE,
+    finalist_range_mask,
     finalist_aliases,
     finalist_spec,
 )
@@ -258,16 +258,7 @@ def _print_mcap_identity(source: object, model_alias: str) -> None:
 
 
 def _in_range_count(points: numpy.ndarray) -> int:
-    x_min, y_min, z_min, x_max, y_max, z_max = FINALIST_POINT_CLOUD_RANGE
-    inside = (
-        (points[:, 0] > x_min)
-        & (points[:, 1] > y_min)
-        & (points[:, 2] > z_min)
-        & (points[:, 0] < x_max)
-        & (points[:, 1] < y_max)
-        & (points[:, 2] < z_max)
-    )
-    return int(numpy.count_nonzero(inside))
+    return int(numpy.count_nonzero(finalist_range_mask(points)))
 
 
 def _percentile(values: list[float], quantile: float) -> float:

@@ -241,7 +241,6 @@ class DetectionFrame:
         if self.status in successful_statuses:
             required_source_values = (
                 self.timestamp_ns,
-                self.storage_timestamp_ns,
                 self.source_frame_id,
                 self.coordinate_frame,
                 self.source_key,

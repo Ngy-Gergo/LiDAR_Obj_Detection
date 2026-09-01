@@ -42,7 +42,7 @@ class PointCloudFrame:
     session_id: str
     frame_index: int
     timestamp_ns: int
-    storage_timestamp_ns: int
+    storage_timestamp_ns: int | None
     source_frame_id: str
     coordinate_frame: str
     source_key: str
@@ -56,10 +56,12 @@ class PointCloudFrame:
         _required_text(self.session_id, "session_id")
         frame_index = _nonnegative_integer(self.frame_index, "frame_index")
         timestamp_ns = _nonnegative_integer(self.timestamp_ns, "timestamp_ns")
-        storage_timestamp_ns = _nonnegative_integer(
-            self.storage_timestamp_ns,
-            "storage_timestamp_ns",
-        )
+        storage_timestamp_ns = self.storage_timestamp_ns
+        if storage_timestamp_ns is not None:
+            storage_timestamp_ns = _nonnegative_integer(
+                storage_timestamp_ns,
+                "storage_timestamp_ns",
+            )
         if timestamp_ns == 0:
             raise ValueError("timestamp_ns must be greater than zero")
         if storage_timestamp_ns == 0:
