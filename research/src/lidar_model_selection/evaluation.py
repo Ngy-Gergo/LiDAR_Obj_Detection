@@ -27,6 +27,7 @@ from .results import (
     ResultRecord,
     binding_for_run,
     create_result,
+    list_results,
     publish_result,
 )
 from .runs import Run, load_run
@@ -38,9 +39,13 @@ __all__ = (
     "RAW_METRIC_PROFILE_ID",
     "RAW_METRIC_PROFILE_VERSION",
     "RAW_METRIC_PROFILE_KEY",
+    "SMOKE_SCHEMA_VERSION",
     "normalize_metrics",
     "evaluate_run",
     "smoke_run",
+    "list_smoke_results",
+    "smoke_stage_status",
+    "validate_smoke_result",
 )
 
 DEFAULT_REPOSITORY_ROOT = Path(__file__).absolute().parents[3]
@@ -51,6 +56,7 @@ RAW_METRIC_PROFILE_VERSION = 1
 RAW_METRIC_PROFILE_KEY = (
     f"{RAW_METRIC_PROFILE_ID}_v{RAW_METRIC_PROFILE_VERSION}"
 )
+SMOKE_SCHEMA_VERSION = 1
 
 _CORE_PACKAGES = ("torch", "mmengine", "mmcv", "mmdet", "mmdet3d")
 _PROVENANCE_SCOPES = (
@@ -61,6 +67,25 @@ _PROVENANCE_SCOPES = (
     "research/src/lidar_model_selection/results.py",
     "research/src/lidar_model_selection/runs.py",
     "research/tools/evaluate.py",
+)
+_SMOKE_PROVENANCE_SCOPES = (
+    "research/src/lidar_model_selection/checkpoints.py",
+    "research/src/lidar_model_selection/compat",
+    "research/src/lidar_model_selection/evaluation.py",
+    "research/src/lidar_model_selection/provenance.py",
+    "research/src/lidar_model_selection/results.py",
+    "research/src/lidar_model_selection/runs.py",
+    "research/tools/smoke_test.py",
+)
+_SMOKE_OUTPUT_KEYS = frozenset(
+    {
+        "loss_keys",
+        "total_loss",
+        "finite_gradient_tensors",
+        "prediction_boxes_shape",
+        "prediction_scores_shape",
+        "prediction_labels_shape",
+    }
 )
 
 
@@ -161,6 +186,19 @@ def _capture_initial_evidence() -> tuple[CodeProvenance, EnvironmentInfo]:
     provenance = capture_code_provenance(
         DEFAULT_REPOSITORY_ROOT,
         _PROVENANCE_SCOPES,
+    )
+    environment = capture_environment(
+        include_packages=True,
+        include_torch=False,
+        package_names=_CORE_PACKAGES,
+    )
+    return provenance, environment
+
+
+def _capture_smoke_initial_evidence() -> tuple[CodeProvenance, EnvironmentInfo]:
+    provenance = capture_code_provenance(
+        DEFAULT_REPOSITORY_ROOT,
+        _SMOKE_PROVENANCE_SCOPES,
     )
     environment = capture_environment(
         include_packages=True,
@@ -325,14 +363,11 @@ def _validate_predictions(predictions: object) -> tuple[object, object, object]:
     return boxes, scores, labels
 
 
-def smoke_run(run: Run | Path | str) -> dict[str, object]:
-    """Exercise loss, backward, and prediction for one completed exact run."""
-    loaded = _load_canonical_run(run)
-    binding_for_run(loaded)
-    selected = loaded.selected_checkpoint
-    assert selected is not None
-    checkpoint_path = _checkpoint_path(loaded, selected)
-
+def _execute_smoke(
+    loaded: Run,
+    checkpoint_path: Path,
+    runtime: dict[str, object],
+) -> dict[str, object]:
     try:
         importlib.import_module(
             "lidar_model_selection.compat.kitti_evaluator"
@@ -340,6 +375,19 @@ def smoke_run(run: Run | Path | str) -> dict[str, object]:
         torch = importlib.import_module("torch")
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for this smoke test")
+        selected_device_index = torch.cuda.current_device()
+        if isinstance(selected_device_index, bool) or not isinstance(
+            selected_device_index,
+            int,
+        ):
+            raise TypeError("Torch returned an invalid current CUDA device index")
+        selected_device_name = str(
+            torch.cuda.get_device_name(selected_device_index)
+        ).strip()
+        if not selected_device_name:
+            raise ValueError("Torch returned an empty current CUDA device name")
+        runtime["selected_cuda_device_index"] = selected_device_index
+        runtime["selected_cuda_device_name"] = selected_device_name
         importlib.import_module("mmdet3d.utils").register_all_modules(
             init_default_scope=True
         )
@@ -419,8 +467,6 @@ def smoke_run(run: Run | Path | str) -> dict[str, object]:
             torch.cuda.synchronize()
         boxes, scores, labels = _validate_predictions(predictions)
         return {
-            "run_id": loaded.run_id,
-            "checkpoint_sha256": selected.sha256,
             "loss_keys": sorted(losses),
             "total_loss": float(total_loss.item()),
             "finite_gradient_tensors": gradient_count,
@@ -430,6 +476,283 @@ def smoke_run(run: Run | Path | str) -> dict[str, object]:
         }
     finally:
         _cleanup_cuda()
+
+
+def _smoke_runtime() -> dict[str, object]:
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    return {
+        "cuda_visible_devices": visibility,
+        "selected_cuda_device_index": None,
+        "selected_cuda_device_name": None,
+    }
+
+
+def _smoke_payload(
+    run: Run,
+    selected_checkpoint: CheckpointArtifact,
+    *,
+    runtime: Mapping[str, object],
+    outputs: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "kind": "smoke",
+        "smoke_schema_version": SMOKE_SCHEMA_VERSION,
+        "model": {
+            "slug": run.manifest.slug,
+            "config": run.manifest.config.to_dict(),
+        },
+        "dataset": run.manifest.dataset.to_dict(),
+        "checkpoint": selected_checkpoint.to_dict(),
+        "runtime": dict(runtime),
+        "outputs": dict(outputs),
+    }
+
+
+def _plain_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _plain_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_json(item) for item in value]
+    return value
+
+
+def _require_shape(value: object, *, rank: int, description: str) -> list[int]:
+    plain = _plain_json(value)
+    if not isinstance(plain, list) or len(plain) != rank or any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 0
+        for item in plain
+    ):
+        raise ValueError(f"{description} must be a non-negative rank-{rank} shape")
+    return plain
+
+
+def validate_smoke_result(run: Run, result: ResultRecord) -> None:
+    """Validate the smoke-specific schema and its exact run identities."""
+    if not isinstance(run, Run):
+        raise TypeError("run must be a loaded Run")
+    if not isinstance(result, ResultRecord):
+        raise TypeError("result must be a ResultRecord")
+    if result.result_type != "smoke":
+        raise ValueError("smoke validation requires a smoke result")
+    expected_binding = binding_for_run(run)
+    if result.binding != expected_binding:
+        raise ValueError("smoke result binding does not match its run")
+    if result.provenance is None:
+        raise ValueError("smoke result requires code/workspace provenance")
+    if result.environment is None:
+        raise ValueError("smoke result requires runtime environment evidence")
+
+    payload = _plain_json(result.payload)
+    if not isinstance(payload, dict):
+        raise TypeError("smoke payload must be an object")
+    expected_keys = {
+        "kind",
+        "smoke_schema_version",
+        "model",
+        "dataset",
+        "checkpoint",
+        "runtime",
+        "outputs",
+    }
+    if set(payload) != expected_keys:
+        raise ValueError("smoke payload has invalid fields")
+    if payload["kind"] != "smoke":
+        raise ValueError("smoke payload kind must be 'smoke'")
+    if payload["smoke_schema_version"] != SMOKE_SCHEMA_VERSION:
+        raise ValueError("unsupported smoke payload schema version")
+    if payload["model"] != {
+        "slug": run.manifest.slug,
+        "config": run.manifest.config.to_dict(),
+    }:
+        raise ValueError("smoke model/config identity does not match its run")
+    if payload["dataset"] != run.manifest.dataset.to_dict():
+        raise ValueError("smoke dataset identity does not match its run")
+    selected = run.selected_checkpoint
+    assert selected is not None
+    if payload["checkpoint"] != selected.to_dict():
+        raise ValueError("smoke checkpoint identity does not match its run")
+
+    runtime = payload["runtime"]
+    if not isinstance(runtime, dict) or set(runtime) != {
+        "cuda_visible_devices",
+        "selected_cuda_device_index",
+        "selected_cuda_device_name",
+    }:
+        raise ValueError("smoke runtime evidence has invalid fields")
+    visibility = runtime["cuda_visible_devices"]
+    if visibility is not None and not isinstance(visibility, str):
+        raise TypeError("smoke CUDA visibility must be text or null")
+    device_index = runtime["selected_cuda_device_index"]
+    device_name = runtime["selected_cuda_device_name"]
+    if (device_index is None) != (device_name is None):
+        raise ValueError("smoke selected CUDA device evidence is incomplete")
+    if device_index is not None and (
+        isinstance(device_index, bool)
+        or not isinstance(device_index, int)
+        or device_index < 0
+    ):
+        raise ValueError("smoke selected CUDA device index is invalid")
+    if device_name is not None and (
+        not isinstance(device_name, str) or not device_name.strip()
+    ):
+        raise ValueError("smoke selected CUDA device name is invalid")
+
+    outputs = payload["outputs"]
+    if not isinstance(outputs, dict):
+        raise TypeError("smoke outputs must be an object")
+    if result.status == "failed":
+        if outputs:
+            raise ValueError("failed smoke result must not claim successful outputs")
+        return
+
+    if visibility is not None and (
+        not visibility or visibility.strip() != visibility or "\0" in visibility
+    ):
+        raise ValueError("successful smoke CUDA visibility is invalid")
+    if device_index is None or device_name is None:
+        raise ValueError("successful smoke result requires selected GPU evidence")
+    if result.environment.gpu_available is not True:
+        raise ValueError("successful smoke result requires an available GPU")
+    if device_name not in result.environment.gpu_devices:
+        raise ValueError("selected smoke GPU is absent from environment evidence")
+    if set(outputs) != _SMOKE_OUTPUT_KEYS:
+        raise ValueError("successful smoke outputs have invalid fields")
+    loss_keys = outputs["loss_keys"]
+    if (
+        not isinstance(loss_keys, list)
+        or not loss_keys
+        or not all(isinstance(key, str) and key for key in loss_keys)
+        or loss_keys != sorted(set(loss_keys))
+    ):
+        raise ValueError("smoke loss keys must be sorted, unique text")
+    total_loss = outputs["total_loss"]
+    if isinstance(total_loss, bool) or not isinstance(total_loss, (int, float)):
+        raise TypeError("smoke total loss must be numeric")
+    if not math.isfinite(float(total_loss)):
+        raise ValueError("smoke total loss must be finite")
+    gradient_count = outputs["finite_gradient_tensors"]
+    if (
+        isinstance(gradient_count, bool)
+        or not isinstance(gradient_count, int)
+        or gradient_count <= 0
+    ):
+        raise ValueError("smoke finite gradient count must be positive")
+    boxes = _require_shape(
+        outputs["prediction_boxes_shape"],
+        rank=2,
+        description="smoke prediction boxes",
+    )
+    scores = _require_shape(
+        outputs["prediction_scores_shape"],
+        rank=1,
+        description="smoke prediction scores",
+    )
+    labels = _require_shape(
+        outputs["prediction_labels_shape"],
+        rank=1,
+        description="smoke prediction labels",
+    )
+    if boxes[1] != 7 or not (boxes[0] == scores[0] == labels[0]):
+        raise ValueError("smoke prediction output shapes disagree")
+
+
+def list_smoke_results(run: Run | Path | str) -> tuple[ResultRecord, ...]:
+    """Load and validate every immutable smoke attempt owned by one run."""
+    loaded = _load_canonical_run(run)
+    records = list_results(loaded, "smoke")
+    for record in records:
+        validate_smoke_result(loaded, record)
+    return records
+
+
+def smoke_stage_status(run: Run | Path | str) -> str:
+    """Classify validated smoke evidence as missing, failed, or successful.
+
+    Multiple successful records remain classified as successful evidence, but
+    no record is silently selected; consumers must still use an explicit ID.
+    """
+    records = list_smoke_results(run)
+    if not records:
+        return "missing"
+    if any(record.successful for record in records):
+        return "successful"
+    return "failed"
+
+
+def smoke_run(run: Run | Path | str) -> ResultRecord:
+    """Exercise and immutably publish one run-bound smoke attempt."""
+    started_at = _timestamp()
+    loaded = _load_canonical_run(run)
+    binding = binding_for_run(loaded)
+    selected = loaded.selected_checkpoint
+    assert selected is not None
+    provenance: CodeProvenance | None = None
+    environment: EnvironmentInfo | None = None
+    runtime = _smoke_runtime()
+
+    try:
+        provenance, environment = _capture_smoke_initial_evidence()
+        visibility = runtime["cuda_visible_devices"]
+        if visibility is not None and (
+            not isinstance(visibility, str)
+            or not visibility
+            or visibility.strip() != visibility
+            or "\0" in visibility
+        ):
+            raise ValueError("CUDA_VISIBLE_DEVICES must be non-empty canonical text")
+        checkpoint_path = _checkpoint_path(loaded, selected)
+        outputs = _execute_smoke(loaded, checkpoint_path, runtime)
+        environment = _capture_execution_environment()
+        succeeded = create_result(
+            result_type="smoke",
+            binding=binding,
+            status="succeeded",
+            started_at=started_at,
+            finished_at=_timestamp(),
+            payload=_smoke_payload(
+                loaded,
+                selected,
+                runtime=runtime,
+                outputs=outputs,
+            ),
+            provenance=provenance,
+            environment=environment,
+            failure=None,
+        )
+        validate_smoke_result(loaded, succeeded)
+    except BaseException as error:
+        if provenance is None or environment is None:
+            # Without code and environment identity there is not enough
+            # trustworthy evidence to publish a schema-valid smoke result.
+            raise
+        failed = create_result(
+            result_type="smoke",
+            binding=binding,
+            status="failed",
+            started_at=started_at,
+            finished_at=_timestamp(),
+            payload=_smoke_payload(
+                loaded,
+                selected,
+                runtime=runtime,
+                outputs={},
+            ),
+            provenance=provenance,
+            environment=environment,
+            failure=ResultFailure(
+                error_type=type(error).__name__,
+                message=str(error),
+                traceback=traceback.format_exc(),
+            ),
+        )
+        validate_smoke_result(loaded, failed)
+        publish_result(loaded, failed)
+        if not isinstance(error, Exception):
+            raise
+        return failed
+
+    publish_result(loaded, succeeded)
+    return succeeded
 
 
 def evaluate_run(run: Run | Path | str) -> ResultRecord:

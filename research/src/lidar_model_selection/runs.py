@@ -214,6 +214,7 @@ class RunPaths:
     manifest: Path
     config: Path
     training: Path
+    smoke: Path
     evaluation: Path
     benchmark: Path
 
@@ -223,6 +224,7 @@ class RunPaths:
             "manifest",
             "config",
             "training",
+            "smoke",
             "evaluation",
             "benchmark",
         ):
@@ -235,6 +237,7 @@ class RunPaths:
             "manifest": root / _MANIFEST_NAME,
             "config": root / _CONFIG_PATH,
             "training": root / "training",
+            "smoke": root / "smoke",
             "evaluation": root / "evaluation",
             "benchmark": root / "benchmark",
         }
@@ -251,6 +254,7 @@ class RunPaths:
             manifest=root / _MANIFEST_NAME,
             config=root / _CONFIG_PATH,
             training=root / "training",
+            smoke=root / "smoke",
             evaluation=root / "evaluation",
             benchmark=root / "benchmark",
         )
@@ -1134,6 +1138,12 @@ def load_run(run_directory: Path | str) -> Run:
         (paths.benchmark, "benchmark directory"),
     ):
         _require_real_directory(path, description=description)
+    try:
+        _require_real_directory(paths.smoke, description="smoke directory")
+    except FileNotFoundError:
+        # Runs created before durable smoke evidence have no smoke directory.
+        # Absence is a valid, distinguishable missing-stage state.
+        pass
     _require_regular_file(paths.manifest, description="run manifest")
     manifest = RunManifest.from_dict(read_json_object(paths.manifest))
     if manifest.run_id != paths.root.name:
@@ -1206,6 +1216,7 @@ def create_run(
     staging = create_staging_directory(final_paths.root.parent, selected_run_id)
     try:
         (staging / "training").mkdir()
+        (staging / "smoke").mkdir()
         (staging / "evaluation").mkdir()
         (staging / "benchmark").mkdir()
         (staging / _CONFIG_PATH).write_bytes(config_bytes)

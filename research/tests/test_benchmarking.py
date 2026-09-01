@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import math
 import os
 import subprocess
@@ -118,6 +119,11 @@ def _stub_evidence(
         benchmarking,
         "_capture_execution_environment",
         lambda: _environment(torch_observed=True),
+    )
+    monkeypatch.setattr(
+        benchmarking,
+        "_discover_nvidia_driver_version",
+        lambda: "575.57.08",
     )
 
 
@@ -372,6 +378,150 @@ def test_host_identity_does_not_treat_architecture_as_a_cpu_model(
     assert benchmarking._host_identity()["cpu_model"] == ""
 
 
+def test_driver_discovery_normalizes_one_version_and_uses_fixed_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def run(command: object, **options: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, options))
+        return subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout="  575.57.08  \n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(benchmarking.subprocess, "run", run)
+
+    assert benchmarking._discover_nvidia_driver_version() == "575.57.08"
+    assert calls == [
+        (
+            (
+                "nvidia-smi",
+                "--query-gpu=driver_version",
+                "--format=csv,noheader",
+            ),
+            {
+                "check": False,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "timeout": 10.0,
+            },
+        )
+    ]
+
+
+def test_driver_discovery_reports_missing_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("nvidia-smi")
+
+    monkeypatch.setattr(benchmarking.subprocess, "run", missing)
+
+    with pytest.raises(RuntimeError, match="nvidia-smi was not found"):
+        benchmarking._discover_nvidia_driver_version()
+
+
+def test_driver_discovery_reports_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        benchmarking.subprocess,
+        "run",
+        lambda command, **options: subprocess.CompletedProcess(
+            command,
+            returncode=9,
+            stdout="",
+            stderr="driver unavailable\n",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="exit code 9: driver unavailable"):
+        benchmarking._discover_nvidia_driver_version()
+
+
+def test_driver_discovery_reports_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(command: object, **options: object) -> None:
+        raise subprocess.TimeoutExpired(command, timeout=10.0)
+
+    monkeypatch.setattr(benchmarking.subprocess, "run", timeout)
+
+    with pytest.raises(RuntimeError, match="timed out after 10 seconds"):
+        benchmarking._discover_nvidia_driver_version()
+
+
+@pytest.mark.parametrize("stdout", ["", " \n", "unknown\n", "575.57 beta\n"])
+def test_driver_discovery_rejects_empty_or_malformed_output(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+) -> None:
+    monkeypatch.setattr(
+        benchmarking.subprocess,
+        "run",
+        lambda command, **options: subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="no GPU rows|malformed"):
+        benchmarking._discover_nvidia_driver_version()
+
+
+def test_driver_discovery_accepts_multiple_consistent_gpu_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        benchmarking.subprocess,
+        "run",
+        lambda command, **options: subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout="575.57.08\n 575.57.08 \n575.57.08\n",
+            stderr="",
+        ),
+    )
+
+    assert benchmarking._discover_nvidia_driver_version() == "575.57.08"
+
+
+def test_driver_discovery_rejects_ambiguous_gpu_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        benchmarking.subprocess,
+        "run",
+        lambda command, **options: subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout="575.57.08\n570.169\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ambiguous across reported GPUs"):
+        benchmarking._discover_nvidia_driver_version()
+
+
+@pytest.mark.parametrize("driver_version", [None, "", " unknown ", "575.57 beta"])
+def test_new_success_evidence_requires_a_valid_driver_version(
+    driver_version: object,
+) -> None:
+    hardware = {"device_type": "cuda"}
+    if driver_version is not None:
+        hardware["nvidia_driver_version"] = driver_version
+
+    with pytest.raises((TypeError, ValueError), match="NVIDIA driver|nvidia_driver"):
+        benchmarking._validated_execution_evidence({"hardware": hardware})
+
+
 def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -394,7 +544,7 @@ def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
     assert record.environment == _environment(torch_observed=True)
     assert record.binding.run_id == run.run_id
     assert record.payload["kind"] == "benchmark"
-    assert record.payload["benchmark_schema_version"] == 1
+    assert record.payload["benchmark_schema_version"] == 2
     assert dict(record.payload["methodology"])["key"] == (
         "mmdet3d_prediction_e2e_sync_v1"
     )
@@ -424,6 +574,10 @@ def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
         "reserved_mib": 3.0,
     }
     assert dict(record.payload["hardware"])["device_name"] == "Fake GPU"
+    assert (
+        dict(record.payload["hardware"])["nvidia_driver_version"]
+        == "575.57.08"
+    )
     host = dict(dict(record.payload["hardware"])["host"])
     assert set(host) == {"cpu_model", "architecture", "os_class"}
     assert all(isinstance(value, str) for value in host.values())
@@ -455,6 +609,53 @@ def test_success_uses_one_iterator_synchronized_scopes_and_publishes(
     }
     assert not Path(config["work_dir"]).exists()
     assert load_result(run, "benchmark", record.result_id) == record
+    record_path = run.paths.benchmark / record.result_id / "result.json"
+    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    assert (
+        persisted["payload"]["hardware"]["nvidia_driver_version"]
+        == "575.57.08"
+    )
+
+
+def test_driver_discovery_failure_publishes_one_bound_failure_before_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code_provenance: CodeProvenance,
+) -> None:
+    run = _completed_run(tmp_path)
+    _stub_evidence(monkeypatch, code_provenance)
+    events, _, _ = _fake_mmengine(
+        monkeypatch,
+        run,
+        warmup=1,
+        samples=1,
+    )
+
+    def discovery_failure() -> str:
+        raise RuntimeError("NVIDIA driver discovery failed with exit code 9")
+
+    monkeypatch.setattr(
+        benchmarking,
+        "_discover_nvidia_driver_version",
+        discovery_failure,
+    )
+
+    record = benchmarking.benchmark_run(run, warmup=1, samples=1)
+
+    assert record.status == "failed"
+    assert record.binding.run_id == run.run_id
+    assert record.provenance == code_provenance
+    assert record.environment == _environment(torch_observed=False)
+    assert record.failure is not None
+    assert record.failure.error_type == "RuntimeError"
+    assert "driver discovery failed" in record.failure.message
+    assert record.payload["benchmark_schema_version"] == 2
+    assert record.payload["hardware"] is None
+    assert record.payload["prediction_ms"] == {}
+    assert record.payload["end_to_end_ms"] == {}
+    assert "runner" not in events
+    assert not any(event.startswith("register:") for event in events)
+    assert len(list_results(run, "benchmark")) == 1
 
 
 @pytest.mark.parametrize("mutated_input", ["config", "checkpoint"])

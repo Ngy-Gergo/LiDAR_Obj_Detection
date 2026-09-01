@@ -1,8 +1,9 @@
-"""Immutable, run-bound evaluation and benchmark result records."""
+"""Immutable, run-bound smoke, evaluation, and benchmark result records."""
 
 from __future__ import annotations
 
 import math
+import os
 import re
 import secrets
 import stat
@@ -40,7 +41,7 @@ __all__ = (
 )
 
 _SCHEMA_VERSION = 1
-_RESULT_TYPES = frozenset({"evaluation", "benchmark"})
+_RESULT_TYPES = frozenset({"smoke", "evaluation", "benchmark"})
 _RESULT_STATUSES = frozenset({"succeeded", "failed"})
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _RESULT_ID_PATTERN = re.compile(
@@ -91,7 +92,7 @@ def _require_result_type(value: object) -> str:
     result_type = _require_string(value, description="result type")
     if result_type not in _RESULT_TYPES:
         raise ValueError(
-            "result type must be 'evaluation' or 'benchmark'"
+            "result type must be 'smoke', 'evaluation', or 'benchmark'"
         )
     return result_type
 
@@ -304,7 +305,7 @@ class ResultFailure:
 
 @dataclass(frozen=True, slots=True)
 class ResultRecord:
-    """One terminal, immutable result from one evaluation or benchmark."""
+    """One terminal, immutable smoke, evaluation, or benchmark result."""
 
     schema_version: int
     result_id: str
@@ -581,11 +582,33 @@ def _require_run_binding(run: Run, binding: ResultBinding) -> None:
 
 def _run_result_directory(run: Run, result_type: str) -> Path:
     binding_for_run(run)
-    return (
-        run.paths.evaluation
-        if _require_result_type(result_type) == "evaluation"
-        else run.paths.benchmark
-    )
+    normalized_type = _require_result_type(result_type)
+    return {
+        "smoke": run.paths.smoke,
+        "evaluation": run.paths.evaluation,
+        "benchmark": run.paths.benchmark,
+    }[normalized_type]
+
+
+def _prepare_result_directory(run: Run, result_type: str) -> Path:
+    parent = _run_result_directory(run, result_type)
+    if result_type != "smoke":
+        return parent
+
+    # Historical runs predate the smoke directory. Create only this canonical
+    # leaf, tolerate a concurrent creator, reject aliases, and durably record
+    # the new directory entry before staging a result within it.
+    try:
+        os.mkdir(parent)
+    except FileExistsError:
+        pass
+    _require_real_directory(parent, description="result directory")
+    descriptor = os.open(run.paths.root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return parent
 
 
 def publish_result(run: Run, result: ResultRecord) -> Path:
@@ -593,7 +616,7 @@ def publish_result(run: Run, result: ResultRecord) -> Path:
     if not isinstance(result, ResultRecord):
         raise TypeError("result must be a ResultRecord")
     _require_run_binding(run, result.binding)
-    parent = _run_result_directory(run, result.result_type)
+    parent = _prepare_result_directory(run, result.result_type)
 
     staging = create_staging_directory(parent, result.result_id)
     destination = parent / result.result_id
@@ -646,7 +669,12 @@ def load_result(
 def list_results(run: Run, result_type: str) -> tuple[ResultRecord, ...]:
     """Load every published result in one explicit run-owned directory."""
     parent = _run_result_directory(run, result_type)
-    _require_real_directory(parent, description="result directory")
+    try:
+        _require_real_directory(parent, description="result directory")
+    except FileNotFoundError:
+        if result_type == "smoke":
+            return ()
+        raise
 
     records = []
     for path in sorted(parent.iterdir(), key=lambda item: item.name):

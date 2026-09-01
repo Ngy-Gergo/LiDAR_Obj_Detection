@@ -179,11 +179,12 @@ def _benchmark_payload(
     latency: object,
     *,
     hardware: str = "NVIDIA Test GPU",
+    driver_version: str = "575.57.08",
     methodology: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "kind": "benchmark",
-        "benchmark_schema_version": 1,
+        "benchmark_schema_version": 2,
         "methodology": _methodology() if methodology is None else methodology,
         "workload": {
             "semantic_partition": run.manifest.dataset.semantic_partition,
@@ -201,6 +202,7 @@ def _benchmark_payload(
             "logical_device_index": 0,
             "visible_device_count": 1,
             "device_name": hardware,
+            "nvidia_driver_version": driver_version,
             "cuda_visible_devices": "0",
             "host": {
                 "cpu_model": "Test CPU",
@@ -472,6 +474,153 @@ def test_runtime_hardware_mismatch_requires_specific_waiver(tmp_path: Path) -> N
     assert report.waivers == (waiver,)
 
 
+def test_runtime_driver_mismatch_requires_exact_driver_waiver(tmp_path: Path) -> None:
+    first = _run(tmp_path, slug="driver-one", digest_character="7")
+    second = _run(tmp_path, slug="driver-two", digest_character="9")
+    for index, (run, driver_version) in enumerate(
+        ((first, "575.57.08"), (second, "570.169"))
+    ):
+        _record(
+            run,
+            result_type="evaluation",
+            payload=_evaluation_payload(run, 60.0 + index),
+        )
+        _record(
+            run,
+            result_type="benchmark",
+            payload=_benchmark_payload(
+                run,
+                10.0 + index,
+                driver_version=driver_version,
+            ),
+        )
+    options = {
+        "accuracy_metric": _METRIC,
+        "runtime_scope": "prediction_ms",
+        "runtime_statistic": "p95_ms",
+    }
+
+    with pytest.raises(ValueError, match=r"runtime\.nvidia_driver_version"):
+        compare_runs((first, second), **options)
+
+    waiver = CompatibilityWaiver(
+        "runtime.nvidia_driver_version",
+        "reviewed driver-version mismatch for this exploratory comparison",
+    )
+    report = compare_runs((first, second), waivers=(waiver,), **options)
+    observations = report.to_dict()["compatibility"][waiver.field]
+    assert set(observations.values()) == {"570.169", "575.57.08"}
+    assert ComparisonReport.from_dict(report.to_dict()) == report
+
+
+def test_historical_missing_driver_remains_explicit_and_waivable(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, slug="driver-unrecorded", digest_character="6")
+    _record(
+        run,
+        result_type="evaluation",
+        payload=_evaluation_payload(run, 60.0),
+    )
+    payload = _benchmark_payload(run, 12.0)
+    payload["benchmark_schema_version"] = 1
+    payload["hardware"].pop("nvidia_driver_version")  # type: ignore[union-attr]
+    benchmark = _record(run, result_type="benchmark", payload=payload)
+    historical_hardware = benchmark.payload["hardware"]
+    assert "nvidia_driver_version" not in historical_hardware  # type: ignore[operator]
+    options = {
+        "accuracy_metric": _METRIC,
+        "runtime_scope": "prediction_ms",
+        "runtime_statistic": "p95_ms",
+    }
+
+    with pytest.raises(ValueError, match=r"runtime\.nvidia_driver_version"):
+        compare_runs((run,), **options)
+
+    waiver = CompatibilityWaiver(
+        "runtime.nvidia_driver_version",
+        "historical benchmark predates NVIDIA driver evidence",
+    )
+    report = compare_runs((run,), waivers=(waiver,), **options)
+    observation = report.to_dict()["compatibility"][waiver.field][run.run_id]
+    assert observation is None
+
+
+def test_comparison_rejects_malformed_recorded_driver_evidence(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, slug="driver-malformed", digest_character="5")
+    _record(
+        run,
+        result_type="evaluation",
+        payload=_evaluation_payload(run, 60.0),
+    )
+    payload = _benchmark_payload(run, 12.0)
+    payload["hardware"]["nvidia_driver_version"] = "unknown"  # type: ignore[index]
+    _record(run, result_type="benchmark", payload=payload)
+
+    with pytest.raises(ValueError, match="dot-separated numeric version"):
+        compare_runs(
+            (run,),
+            accuracy_metric=_METRIC,
+            runtime_scope="prediction_ms",
+            runtime_statistic="p95_ms",
+        )
+
+
+def test_comparison_rejects_schema_v2_result_missing_driver_evidence(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, slug="driver-missing-v2", digest_character="4")
+    _record(
+        run,
+        result_type="evaluation",
+        payload=_evaluation_payload(run, 60.0),
+    )
+    payload = _benchmark_payload(run, 12.0)
+    payload["hardware"].pop("nvidia_driver_version")  # type: ignore[union-attr]
+    _record(run, result_type="benchmark", payload=payload)
+
+    with pytest.raises(ValueError, match="schema version 2 or newer requires"):
+        compare_runs(
+            (run,),
+            accuracy_metric=_METRIC,
+            runtime_scope="prediction_ms",
+            runtime_statistic="p95_ms",
+            waivers=(
+                CompatibilityWaiver(
+                    "runtime.nvidia_driver_version",
+                    "a waiver cannot fabricate required new evidence",
+                ),
+            ),
+        )
+
+
+def test_legacy_comparison_schema_v2_without_driver_field_still_loads(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, slug="legacy-report", digest_character="3")
+    _publish_pair(run, score=60.0, latency=12.0)
+    report = compare_runs(
+        (run,),
+        accuracy_metric=_METRIC,
+        runtime_scope="prediction_ms",
+        runtime_statistic="p95_ms",
+    )
+    document = report.to_dict()
+    document["schema_version"] = 2
+    compatibility = document["compatibility"]
+    compatibility.pop("runtime.nvidia_driver_version")  # type: ignore[union-attr]
+
+    legacy = ComparisonReport.from_dict(document)
+
+    assert legacy.schema_version == 2
+    assert "runtime.nvidia_driver_version" not in legacy.compatibility
+    output = tmp_path / "legacy-comparison-v2.json"
+    write_comparison_report(output, legacy)
+    assert load_comparison_report(output) == legacy
+
+
 def test_e2e_host_mismatch_or_unknown_requires_persisted_waiver(
     tmp_path: Path,
 ) -> None:
@@ -633,6 +782,7 @@ def test_historical_runtime_methodology_needs_each_exact_unknown_waiver(
         ),
         "gpu_name": "NVIDIA Test GPU",
         "device_type": "cuda",
+        "nvidia_driver_version": "575.57.08",
         "precision": "fp32",
         "batch_size": 1,
         "semantic_partition": "KITTI validation",

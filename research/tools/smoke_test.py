@@ -65,7 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = arguments.gpu
     try:
-        summary = smoke_run(DEFAULT_RUNS_ROOT / arguments.run_id)
+        record = smoke_run(DEFAULT_RUNS_ROOT / arguments.run_id)
     except Exception as error:
         print(
             f"ERROR: smoke test failed: {type(error).__name__}: {error}",
@@ -73,14 +73,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    print(f"run: {summary['run_id']}")
-    print(f"selected checkpoint SHA-256: {summary['checkpoint_sha256']}")
-    print(f"loss keys: {summary['loss_keys']}")
-    print(f"total loss: {summary['total_loss']:.6f}")
-    print(f"finite gradient tensors: {summary['finite_gradient_tensors']}")
-    print(f"prediction boxes: {summary['prediction_boxes_shape']}")
-    print(f"prediction scores: {summary['prediction_scores_shape']}")
-    print(f"prediction labels: {summary['prediction_labels_shape']}")
+    result_path = (
+        DEFAULT_RUNS_ROOT
+        / arguments.run_id
+        / "smoke"
+        / record.result_id
+        / "result.json"
+    ).absolute()
+    print(f"result ID: {record.result_id}")
+    print(f"result path: {result_path}")
+    print(f"result status: {record.status}")
+    if not record.successful:
+        assert record.failure is not None
+        print(
+            "ERROR: smoke test failed: "
+            f"{record.failure.error_type}: {record.failure.message}",
+            file=sys.stderr,
+        )
+        return 1
+
+    summary = record.payload["outputs"]
+    print(f"run: {record.binding.run_id}")
+    print(
+        "selected checkpoint SHA-256: "
+        f"{record.binding.checkpoint_sha256}"
+    )
+    print(f"loss keys: {summary['loss_keys']}")  # type: ignore[index]
+    print(f"total loss: {summary['total_loss']:.6f}")  # type: ignore[index]
+    print(
+        "finite gradient tensors: "
+        f"{summary['finite_gradient_tensors']}"  # type: ignore[index]
+    )
+    print(
+        f"prediction boxes: {summary['prediction_boxes_shape']}"  # type: ignore[index]
+    )
+    print(
+        f"prediction scores: {summary['prediction_scores_shape']}"  # type: ignore[index]
+    )
+    print(
+        f"prediction labels: {summary['prediction_labels_shape']}"  # type: ignore[index]
+    )
     print("CenterPoint smoke test: PASS")
     return 0
 

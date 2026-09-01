@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +31,8 @@ __all__ = (
     "load_comparison_report",
 )
 
-COMPARISON_SCHEMA_VERSION = 2
+COMPARISON_SCHEMA_VERSION = 3
+_LEGACY_COMPARISON_SCHEMA_VERSION = 2
 DEFAULT_RUNS_ROOT = Path(__file__).absolute().parents[3] / "research" / "runs"
 
 _KITTI_PREFIX = "Kitti metric/pred_instances_3d/KITTI/"
@@ -83,6 +85,7 @@ RUNTIME_COMPATIBILITY_FIELDS = (
     "runtime.timing_scope",
     "runtime.statistic",
     "runtime.hardware_class",
+    "runtime.nvidia_driver_version",
     "runtime.host_identity",
     "runtime.precision",
     "runtime.batch_size",
@@ -96,6 +99,23 @@ _RANKING_POLICY = (
     "equal values share a rank and leave the corresponding rank gap"
 )
 _CORE_RUNTIME_PACKAGES = ("torch", "mmengine", "mmcv", "mmdet", "mmdet3d")
+_NVIDIA_DRIVER_VERSION_PATTERN = re.compile(
+    r"[0-9]+(?:\.[0-9]+){1,3}",
+    flags=re.ASCII,
+)
+
+
+def _compatibility_fields(
+    *,
+    runtime: bool,
+    schema_version: int,
+) -> set[str]:
+    fields = set(ACCURACY_COMPATIBILITY_FIELDS)
+    if runtime:
+        fields.update(RUNTIME_COMPATIBILITY_FIELDS)
+        if schema_version == _LEGACY_COMPARISON_SCHEMA_VERSION:
+            fields.remove("runtime.nvidia_driver_version")
+    return fields
 
 
 def _require_mapping(value: object, *, description: str) -> Mapping[str, Any]:
@@ -474,6 +494,7 @@ def _normalize_waivers(
     waivers: Iterable[CompatibilityWaiver],
     *,
     runtime: bool,
+    schema_version: int = COMPARISON_SCHEMA_VERSION,
 ) -> tuple[CompatibilityWaiver, ...]:
     if isinstance(waivers, (str, bytes, Mapping)):
         raise TypeError("waivers must be an iterable of CompatibilityWaiver values")
@@ -483,9 +504,10 @@ def _normalize_waivers(
     fields = [waiver.field for waiver in normalized]
     if len(fields) != len(set(fields)):
         raise ValueError("compatibility waiver fields must be unique")
-    supported = set(ACCURACY_COMPATIBILITY_FIELDS)
-    if runtime:
-        supported.update(RUNTIME_COMPATIBILITY_FIELDS)
+    supported = _compatibility_fields(
+        runtime=runtime,
+        schema_version=schema_version,
+    )
     unknown = set(fields) - supported
     if unknown:
         raise ValueError(f"unsupported compatibility waiver fields: {sorted(unknown)}")
@@ -514,10 +536,12 @@ def _validate_compatibility(
     run_ids: tuple[str, ...],
     waivers: tuple[CompatibilityWaiver, ...],
     runtime: bool,
+    schema_version: int = COMPARISON_SCHEMA_VERSION,
 ) -> Mapping[str, object]:
-    expected_fields = set(ACCURACY_COMPATIBILITY_FIELDS)
-    if runtime:
-        expected_fields.update(RUNTIME_COMPATIBILITY_FIELDS)
+    expected_fields = _compatibility_fields(
+        runtime=runtime,
+        schema_version=schema_version,
+    )
     if set(compatibility) != expected_fields:
         raise ValueError(
             "comparison compatibility fields are incomplete or unexpected; "
@@ -615,10 +639,10 @@ class ComparisonReport:
     rows: tuple[ComparisonRow, ...]
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.schema_version, bool)
-            or self.schema_version != COMPARISON_SCHEMA_VERSION
-        ):
+        if isinstance(self.schema_version, bool) or self.schema_version not in {
+            _LEGACY_COMPARISON_SCHEMA_VERSION,
+            COMPARISON_SCHEMA_VERSION,
+        }:
             raise ValueError(
                 f"unsupported comparison schema_version: {self.schema_version!r}"
             )
@@ -667,7 +691,11 @@ class ComparisonReport:
             elif row.runtime_scope is not None:
                 raise ValueError("accuracy-only report must not contain runtime rows")
 
-        normalized_waivers = _normalize_waivers(self.waivers, runtime=runtime)
+        normalized_waivers = _normalize_waivers(
+            self.waivers,
+            runtime=runtime,
+            schema_version=self.schema_version,
+        )
         if self.waivers != normalized_waivers:
             raise ValueError("comparison waivers must be sorted by field")
         normalized_compatibility = _validate_compatibility(
@@ -675,6 +703,7 @@ class ComparisonReport:
             run_ids=run_ids,
             waivers=normalized_waivers,
             runtime=runtime,
+            schema_version=self.schema_version,
         )
         object.__setattr__(self, "compatibility", normalized_compatibility)
 
@@ -953,7 +982,10 @@ def _runtime_hardware(
     payload: Mapping[str, Any],
     source: Mapping[str, Any] | None,
 ) -> object:
-    hardware = _optional_mapping(payload.get("hardware"), description="benchmark hardware")
+    hardware = _optional_mapping(
+        payload.get("hardware"),
+        description="benchmark hardware",
+    )
     if hardware is not None:
         return {
             "device_type": hardware.get("device_type"),
@@ -963,6 +995,53 @@ def _runtime_hardware(
         "device_type": None if source is None else source.get("device_type"),
         "device_name": None if source is None else source.get("gpu_name"),
     }
+
+
+def _runtime_nvidia_driver_version(
+    payload: Mapping[str, Any],
+    source: Mapping[str, Any] | None,
+) -> object:
+    schema_version = payload.get("benchmark_schema_version")
+    if schema_version is not None and (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version <= 0
+    ):
+        raise ValueError("benchmark schema version must be a positive integer")
+
+    hardware = _optional_mapping(
+        payload.get("hardware"),
+        description="benchmark hardware",
+    )
+    requires_native_driver = (
+        isinstance(schema_version, int) and schema_version >= 2
+    )
+    if requires_native_driver and (
+        hardware is None or "nvidia_driver_version" not in hardware
+    ):
+        raise ValueError(
+            "benchmark schema version 2 or newer requires "
+            "hardware.nvidia_driver_version"
+        )
+
+    if hardware is not None and "nvidia_driver_version" in hardware:
+        driver_version = _require_text(
+            hardware["nvidia_driver_version"],
+            description="benchmark NVIDIA driver version",
+        )
+    elif source is not None and "nvidia_driver_version" in source:
+        driver_version = _require_text(
+            source["nvidia_driver_version"],
+            description="historical NVIDIA driver version",
+        )
+    else:
+        return None
+
+    if _NVIDIA_DRIVER_VERSION_PATTERN.fullmatch(driver_version) is None:
+        raise ValueError(
+            "NVIDIA driver version must be a dot-separated numeric version"
+        )
+    return driver_version
 
 
 def _runtime_host_identity(
@@ -1080,6 +1159,10 @@ def _runtime_observations(
         "runtime.timing_scope": timing_scope,
         "runtime.statistic": statistic_evidence,
         "runtime.hardware_class": _runtime_hardware(payload, source),
+        "runtime.nvidia_driver_version": _runtime_nvidia_driver_version(
+            payload,
+            source,
+        ),
         "runtime.host_identity": _runtime_host_identity(
             record, payload, source, scope=scope
         ),

@@ -7,6 +7,8 @@ import importlib
 import math
 import os
 import platform
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -47,12 +49,17 @@ __all__ = (
 DEFAULT_REPOSITORY_ROOT = Path(__file__).absolute().parents[3]
 DEFAULT_RUNS_ROOT = DEFAULT_REPOSITORY_ROOT / "research" / "runs"
 
-BENCHMARK_SCHEMA_VERSION = 1
+BENCHMARK_SCHEMA_VERSION = 2
 METHODOLOGY_ID = "mmdet3d_prediction_e2e_sync"
 METHODOLOGY_VERSION = 1
 METHODOLOGY_KEY = f"{METHODOLOGY_ID}_v{METHODOLOGY_VERSION}"
 
 _TWENTY_HZ_THRESHOLD_MS = 50.0
+_NVIDIA_DRIVER_DISCOVERY_TIMEOUT_SECONDS = 10.0
+_NVIDIA_DRIVER_VERSION_PATTERN = re.compile(
+    r"[0-9]+(?:\.[0-9]+){1,3}",
+    flags=re.ASCII,
+)
 _CORE_PACKAGES = ("torch", "mmengine", "mmcv", "mmdet", "mmdet3d")
 _PROVENANCE_SCOPES = (
     "research/src/lidar_model_selection/benchmarking.py",
@@ -252,6 +259,110 @@ def _host_identity() -> dict[str, str]:
     }
 
 
+def _normalize_nvidia_driver_version(
+    value: object,
+    *,
+    description: str = "NVIDIA driver version",
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{description} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{description} must not be empty")
+    if _NVIDIA_DRIVER_VERSION_PATTERN.fullmatch(normalized) is None:
+        raise ValueError(
+            f"{description} must be a dot-separated numeric version"
+        )
+    return normalized
+
+
+def _discover_nvidia_driver_version() -> str:
+    """Return one unambiguous normalized NVIDIA driver version."""
+    command = (
+        "nvidia-smi",
+        "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=_NVIDIA_DRIVER_DISCOVERY_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            "NVIDIA driver discovery failed because nvidia-smi was not found"
+        ) from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            "NVIDIA driver discovery timed out after "
+            f"{_NVIDIA_DRIVER_DISCOVERY_TIMEOUT_SECONDS:g} seconds"
+        ) from error
+    except OSError as error:
+        raise RuntimeError(
+            f"NVIDIA driver discovery could not execute nvidia-smi: {error}"
+        ) from error
+
+    if completed.returncode != 0:
+        detail = " ".join(completed.stderr.split())
+        suffix = "" if not detail else f": {detail}"
+        raise RuntimeError(
+            "NVIDIA driver discovery failed with nvidia-smi exit code "
+            f"{completed.returncode}{suffix}"
+        )
+
+    rows = completed.stdout.splitlines()
+    if not rows:
+        raise ValueError("NVIDIA driver discovery returned no GPU rows")
+    versions: list[str] = []
+    for index, row in enumerate(rows):
+        try:
+            versions.append(
+                _normalize_nvidia_driver_version(
+                    row,
+                    description=f"NVIDIA driver version in GPU row {index}",
+                )
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"malformed NVIDIA driver discovery output: {error}"
+            ) from error
+    unique_versions = tuple(dict.fromkeys(versions))
+    if len(unique_versions) != 1:
+        raise ValueError(
+            "NVIDIA driver discovery is ambiguous across reported GPUs: "
+            f"{list(unique_versions)!r}"
+        )
+    return unique_versions[0]
+
+
+def _validated_execution_evidence(
+    execution: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate evidence required for every newly successful benchmark."""
+    normalized = dict(execution)
+    hardware = execution.get("hardware")
+    if not isinstance(hardware, Mapping):
+        raise ValueError("successful benchmark hardware evidence is missing")
+    if "nvidia_driver_version" not in hardware:
+        raise ValueError(
+            "successful benchmark hardware evidence is missing "
+            "nvidia_driver_version"
+        )
+    normalized_hardware = dict(hardware)
+    normalized_hardware["nvidia_driver_version"] = (
+        _normalize_nvidia_driver_version(
+            hardware["nvidia_driver_version"],
+            description="benchmark NVIDIA driver version",
+        )
+    )
+    normalized["hardware"] = normalized_hardware
+    return normalized
+
+
 def _force_test_dataloader(config: object) -> None:
     dataloader = _value(config, "test_dataloader", None)
     if dataloader is None:
@@ -350,6 +461,7 @@ def _execute_mmengine(
 
         torch = importlib.import_module("torch")
         cuda = _validate_cuda(torch)
+        nvidia_driver_version = _discover_nvidia_driver_version()
 
         mmdet3d_utils = importlib.import_module("mmdet3d.utils")
         mmdet3d_utils.register_all_modules(init_default_scope=True)
@@ -444,6 +556,7 @@ def _execute_mmengine(
                 "logical_device_index": 0,
                 "visible_device_count": 1,
                 "device_name": str(cuda.get_device_name(0)),
+                "nvidia_driver_version": nvidia_driver_version,
                 "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
                 "host": _host_identity(),
             }
@@ -570,11 +683,13 @@ def benchmark_run(
     try:
         provenance, environment = _capture_initial_evidence()
         checkpoint_path = _checkpoint_path(loaded, selected_checkpoint)
-        execution = _execute_mmengine(
-            loaded,
-            checkpoint_path,
-            warmup=warmup,
-            samples=samples,
+        execution = _validated_execution_evidence(
+            _execute_mmengine(
+                loaded,
+                checkpoint_path,
+                warmup=warmup,
+                samples=samples,
+            )
         )
         environment = _capture_execution_environment()
     except BaseException as error:

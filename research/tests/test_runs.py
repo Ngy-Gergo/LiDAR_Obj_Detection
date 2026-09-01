@@ -174,6 +174,7 @@ def test_run_paths_are_absolute_and_canonical(tmp_path: Path) -> None:
     assert paths.manifest == paths.root / "manifest.json"
     assert paths.config == paths.root / "config.py"
     assert paths.training == paths.root / "training"
+    assert paths.smoke == paths.root / "smoke"
     assert paths.evaluation == paths.root / "evaluation"
     assert paths.benchmark == paths.root / "benchmark"
     assert RunPaths.from_root(paths.root) == paths
@@ -349,6 +350,7 @@ def test_create_native_run_transactionally_publishes_canonical_layout(
     assert created.manifest.resumable is True
     assert created.manifest.history_complete is True
     assert created.paths.training.is_dir()
+    assert created.paths.smoke.is_dir()
     assert created.paths.evaluation.is_dir()
     assert created.paths.benchmark.is_dir()
     assert load_run(created.paths.root) == created
