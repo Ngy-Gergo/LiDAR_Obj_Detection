@@ -1,0 +1,631 @@
+{
+  "accuracy_metric": "car_3d_ap40_moderate_strict",
+  "compatibility": {
+    "accuracy.dataset.identity": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": "0bb26013400c77313f2720b2295f78fc84ba30ef1711b3c769608fa02aa3c8df",
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": "0bb26013400c77313f2720b2295f78fc84ba30ef1711b3c769608fa02aa3c8df",
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": "0bb26013400c77313f2720b2295f78fc84ba30ef1711b3c769608fa02aa3c8df",
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": "0bb26013400c77313f2720b2295f78fc84ba30ef1711b3c769608fa02aa3c8df"
+    },
+    "accuracy.dataset.name": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": "KITTI",
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": "KITTI",
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": "KITTI",
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": "KITTI"
+    },
+    "accuracy.dataset.version": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": null,
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": null,
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": null,
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": null
+    },
+    "accuracy.metric_profile.id": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": "mmengine_raw_scalar_metrics",
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": "mmengine_raw_scalar_metrics",
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": "mmengine_raw_scalar_metrics",
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": "mmengine_raw_scalar_metrics"
+    },
+    "accuracy.metric_profile.version": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": 1,
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": 1,
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": 1,
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": 1
+    },
+    "accuracy.semantic_partition": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "evaluation": "KITTI validation",
+        "evaluation_framework_key": "test_dataloader",
+        "run": "KITTI validation",
+        "run_framework_key": "test_dataloader"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "evaluation": "KITTI validation",
+        "evaluation_framework_key": "test_dataloader",
+        "run": "KITTI validation",
+        "run_framework_key": "test_dataloader"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "evaluation": "KITTI validation",
+        "evaluation_framework_key": "test_dataloader",
+        "run": "KITTI validation",
+        "run_framework_key": "test_dataloader"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "evaluation": "KITTI validation",
+        "evaluation_framework_key": "test_dataloader",
+        "run": "KITTI validation",
+        "run_framework_key": "test_dataloader"
+      }
+    },
+    "accuracy.task_class_schema": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "class_names": [
+          "Car"
+        ],
+        "tasks": [
+          {
+            "classes": [
+              "Car"
+            ],
+            "name": "3d_object_detection_7d"
+          }
+        ]
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "class_names": [
+          "Car"
+        ],
+        "tasks": [
+          {
+            "classes": [
+              "Car"
+            ],
+            "name": "3d_object_detection_7d"
+          }
+        ]
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "class_names": [
+          "Car"
+        ],
+        "tasks": [
+          {
+            "classes": [
+              "Car"
+            ],
+            "name": "3d_object_detection_7d"
+          }
+        ]
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "class_names": [
+          "Car"
+        ],
+        "tasks": [
+          {
+            "classes": [
+              "Car"
+            ],
+            "name": "3d_object_detection_7d"
+          }
+        ]
+      }
+    },
+    "runtime.batch_size": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": 1,
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": 1,
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": 1,
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": 1
+    },
+    "runtime.hardware_class": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "device_name": "NVIDIA GeForce RTX 2080 Ti",
+        "device_type": "cuda"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "device_name": "NVIDIA GeForce RTX 2080 Ti",
+        "device_type": "cuda"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "device_name": "NVIDIA GeForce RTX 2080 Ti",
+        "device_type": "cuda"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "device_name": "NVIDIA GeForce RTX 2080 Ti",
+        "device_type": "cuda"
+      }
+    },
+    "runtime.host_identity": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "architecture": "x86_64",
+        "cpu_model": "Intel(R) Core(TM) i9-7940X CPU @ 3.10GHz",
+        "os_class": "Linux"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "architecture": "x86_64",
+        "cpu_model": "Intel(R) Core(TM) i9-7940X CPU @ 3.10GHz",
+        "os_class": "Linux"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "architecture": "x86_64",
+        "cpu_model": "Intel(R) Core(TM) i9-7940X CPU @ 3.10GHz",
+        "os_class": "Linux"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "architecture": "x86_64",
+        "cpu_model": "Intel(R) Core(TM) i9-7940X CPU @ 3.10GHz",
+        "os_class": "Linux"
+      }
+    },
+    "runtime.methodology.id": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": "mmdet3d_prediction_e2e_sync",
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": "mmdet3d_prediction_e2e_sync",
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": "mmdet3d_prediction_e2e_sync",
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": "mmdet3d_prediction_e2e_sync"
+    },
+    "runtime.methodology.version": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": 1,
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": 1,
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": 1,
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": 1
+    },
+    "runtime.nvidia_driver_version": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": "575.57.08",
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": "575.57.08",
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": "575.57.08",
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": "575.57.08"
+    },
+    "runtime.precision": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "autocast_enabled_by_benchmark": false,
+        "execution_policy": "torch_inference_mode_no_autocast",
+        "inference_mode": true,
+        "model_parameter_dtypes": [
+          "torch.float32"
+        ]
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "autocast_enabled_by_benchmark": false,
+        "execution_policy": "torch_inference_mode_no_autocast",
+        "inference_mode": true,
+        "model_parameter_dtypes": [
+          "torch.float32"
+        ]
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "autocast_enabled_by_benchmark": false,
+        "execution_policy": "torch_inference_mode_no_autocast",
+        "inference_mode": true,
+        "model_parameter_dtypes": [
+          "torch.float32"
+        ]
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "autocast_enabled_by_benchmark": false,
+        "execution_policy": "torch_inference_mode_no_autocast",
+        "inference_mode": true,
+        "model_parameter_dtypes": [
+          "torch.float32"
+        ]
+      }
+    },
+    "runtime.software_identity": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "cuda_version": "12.1",
+        "cudnn_version": "8902",
+        "machine": "x86_64",
+        "packages": {
+          "mmcv": "2.1.0",
+          "mmdet": "3.3.0",
+          "mmdet3d": "1.4.0",
+          "mmengine": "0.10.7",
+          "torch": "2.1.2+cu121"
+        },
+        "platform": "Linux-6.8.0-64-generic-x86_64-with-glibc2.35",
+        "python_implementation": "CPython",
+        "python_version": "3.10.20",
+        "torch_version": "2.1.2+cu121"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "cuda_version": "12.1",
+        "cudnn_version": "8902",
+        "machine": "x86_64",
+        "packages": {
+          "mmcv": "2.1.0",
+          "mmdet": "3.3.0",
+          "mmdet3d": "1.4.0",
+          "mmengine": "0.10.7",
+          "torch": "2.1.2+cu121"
+        },
+        "platform": "Linux-6.8.0-64-generic-x86_64-with-glibc2.35",
+        "python_implementation": "CPython",
+        "python_version": "3.10.20",
+        "torch_version": "2.1.2+cu121"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "cuda_version": "12.1",
+        "cudnn_version": "8902",
+        "machine": "x86_64",
+        "packages": {
+          "mmcv": "2.1.0",
+          "mmdet": "3.3.0",
+          "mmdet3d": "1.4.0",
+          "mmengine": "0.10.7",
+          "torch": "2.1.2+cu121"
+        },
+        "platform": "Linux-6.8.0-64-generic-x86_64-with-glibc2.35",
+        "python_implementation": "CPython",
+        "python_version": "3.10.20",
+        "torch_version": "2.1.2+cu121"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "cuda_version": "12.1",
+        "cudnn_version": "8902",
+        "machine": "x86_64",
+        "packages": {
+          "mmcv": "2.1.0",
+          "mmdet": "3.3.0",
+          "mmdet3d": "1.4.0",
+          "mmengine": "0.10.7",
+          "torch": "2.1.2+cu121"
+        },
+        "platform": "Linux-6.8.0-64-generic-x86_64-with-glibc2.35",
+        "python_implementation": "CPython",
+        "python_version": "3.10.20",
+        "torch_version": "2.1.2+cu121"
+      }
+    },
+    "runtime.statistic": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "definitions": {
+          "percentiles": "linear interpolation at (n - 1) * q",
+          "standard_deviation": "population standard deviation (ddof=0)",
+          "twenty_hz": "end-to-end p95 <= 50 ms; frames strictly over 50 ms are counted",
+          "unit": "milliseconds"
+        },
+        "name": "p95_ms"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "definitions": {
+          "percentiles": "linear interpolation at (n - 1) * q",
+          "standard_deviation": "population standard deviation (ddof=0)",
+          "twenty_hz": "end-to-end p95 <= 50 ms; frames strictly over 50 ms are counted",
+          "unit": "milliseconds"
+        },
+        "name": "p95_ms"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "definitions": {
+          "percentiles": "linear interpolation at (n - 1) * q",
+          "standard_deviation": "population standard deviation (ddof=0)",
+          "twenty_hz": "end-to-end p95 <= 50 ms; frames strictly over 50 ms are counted",
+          "unit": "milliseconds"
+        },
+        "name": "p95_ms"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "definitions": {
+          "percentiles": "linear interpolation at (n - 1) * q",
+          "standard_deviation": "population standard deviation (ddof=0)",
+          "twenty_hz": "end-to-end p95 <= 50 ms; frames strictly over 50 ms are counted",
+          "unit": "milliseconds"
+        },
+        "name": "p95_ms"
+      }
+    },
+    "runtime.timing_scope": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "definition": "next(iterator) + model.test_step(batch)",
+        "name": "end_to_end_ms",
+        "synchronization": {
+          "device": "CUDA",
+          "end_to_end": "synchronize before start, after next(iterator), and after model.test_step before stop",
+          "prediction": "start after the post-next synchronization and stop after the post-test_step synchronization"
+        }
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "definition": "next(iterator) + model.test_step(batch)",
+        "name": "end_to_end_ms",
+        "synchronization": {
+          "device": "CUDA",
+          "end_to_end": "synchronize before start, after next(iterator), and after model.test_step before stop",
+          "prediction": "start after the post-next synchronization and stop after the post-test_step synchronization"
+        }
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "definition": "next(iterator) + model.test_step(batch)",
+        "name": "end_to_end_ms",
+        "synchronization": {
+          "device": "CUDA",
+          "end_to_end": "synchronize before start, after next(iterator), and after model.test_step before stop",
+          "prediction": "start after the post-next synchronization and stop after the post-test_step synchronization"
+        }
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "definition": "next(iterator) + model.test_step(batch)",
+        "name": "end_to_end_ms",
+        "synchronization": {
+          "device": "CUDA",
+          "end_to_end": "synchronize before start, after next(iterator), and after model.test_step before stop",
+          "prediction": "start after the post-next synchronization and stop after the post-test_step synchronization"
+        }
+      }
+    },
+    "runtime.warmup_measurement_policy": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "iterator_policy": "one iterator shared by warm-up and measured samples; no reset or cycling",
+        "measured_sample_count": 1000,
+        "sample_policy": "measure exactly the requested consecutive samples following warm-up; fail if the iterator is exhausted",
+        "warmup_count": 100,
+        "warmup_policy": "execute the requested leading samples, synchronize, collect garbage, empty the CUDA cache, then reset peak memory counters"
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "iterator_policy": "one iterator shared by warm-up and measured samples; no reset or cycling",
+        "measured_sample_count": 1000,
+        "sample_policy": "measure exactly the requested consecutive samples following warm-up; fail if the iterator is exhausted",
+        "warmup_count": 100,
+        "warmup_policy": "execute the requested leading samples, synchronize, collect garbage, empty the CUDA cache, then reset peak memory counters"
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "iterator_policy": "one iterator shared by warm-up and measured samples; no reset or cycling",
+        "measured_sample_count": 1000,
+        "sample_policy": "measure exactly the requested consecutive samples following warm-up; fail if the iterator is exhausted",
+        "warmup_count": 100,
+        "warmup_policy": "execute the requested leading samples, synchronize, collect garbage, empty the CUDA cache, then reset peak memory counters"
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "iterator_policy": "one iterator shared by warm-up and measured samples; no reset or cycling",
+        "measured_sample_count": 1000,
+        "sample_policy": "measure exactly the requested consecutive samples following warm-up; fail if the iterator is exhausted",
+        "warmup_count": 100,
+        "warmup_policy": "execute the requested leading samples, synchronize, collect garbage, empty the CUDA cache, then reset peak memory counters"
+      }
+    },
+    "runtime.workload_policy": {
+      "20260827T092033Z-pillar02-3367910930525d0c12ddc346": {
+        "benchmark_framework_key": "test_dataloader",
+        "benchmark_semantic_partition": "KITTI validation",
+        "drop_last": false,
+        "num_workers": 0,
+        "persistent_workers": false,
+        "run_framework_key": "test_dataloader",
+        "run_semantic_partition": "KITTI validation",
+        "shuffle": false
+      },
+      "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc": {
+        "benchmark_framework_key": "test_dataloader",
+        "benchmark_semantic_partition": "KITTI validation",
+        "drop_last": false,
+        "num_workers": 0,
+        "persistent_workers": false,
+        "run_framework_key": "test_dataloader",
+        "run_semantic_partition": "KITTI validation",
+        "shuffle": false
+      },
+      "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675": {
+        "benchmark_framework_key": "test_dataloader",
+        "benchmark_semantic_partition": "KITTI validation",
+        "drop_last": false,
+        "num_workers": 0,
+        "persistent_workers": false,
+        "run_framework_key": "test_dataloader",
+        "run_semantic_partition": "KITTI validation",
+        "shuffle": false
+      },
+      "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6": {
+        "benchmark_framework_key": "test_dataloader",
+        "benchmark_semantic_partition": "KITTI validation",
+        "drop_last": false,
+        "num_workers": 0,
+        "persistent_workers": false,
+        "run_framework_key": "test_dataloader",
+        "run_semantic_partition": "KITTI validation",
+        "shuffle": false
+      }
+    }
+  },
+  "ranking_policy": "competition ranking; accuracy descending and runtime ascending; equal values share a rank and leave the corresponding rank gap",
+  "rows": [
+    {
+      "accuracy_metric": "car_3d_ap40_moderate_strict",
+      "accuracy_rank": 4,
+      "accuracy_raw_key": "Kitti metric/pred_instances_3d/KITTI/Car_3D_AP40_moderate_strict",
+      "accuracy_value": 55.1909,
+      "ap40": {
+        "car_3d_ap40_easy_strict": 68.9758,
+        "car_3d_ap40_hard_strict": 49.737,
+        "car_3d_ap40_moderate_strict": 55.1909,
+        "car_bev_ap40_easy_strict": 85.6702,
+        "car_bev_ap40_hard_strict": 71.1751,
+        "car_bev_ap40_moderate_strict": 75.6608
+      },
+      "benchmark_result_id": "20260901T103846232075Z-benchmark-3e3b0fb771aaacf47599a66d",
+      "checkpoint_sha256": "7814db42c341be87c09ae4e68a0266288227aeac6a98cfb83420b4ffb5caaf8d",
+      "checkpoint_size_bytes": 29277286,
+      "config_sha256": "b0c8a5af268a252be25d56d83ad51b7d1c06ff1e7caf3fde6e418eb2af872fd2",
+      "evaluation_result_id": "20260901T093536573158Z-evaluation-e06d68a8b48bd9b854eaf052",
+      "latency_statistics": {
+        "end_to_end_ms": {
+          "max_ms": 20.559471,
+          "mean_ms": 14.245674235000001,
+          "min_ms": 11.954237,
+          "p50_ms": 14.242542,
+          "p95_ms": 15.003207,
+          "p99_ms": 15.710924449999998,
+          "standard_deviation_ms": 0.5739472107281276
+        },
+        "prediction_ms": {
+          "max_ms": 18.553628,
+          "mean_ms": 12.490080331,
+          "min_ms": 10.420717,
+          "p50_ms": 12.504567999999999,
+          "p95_ms": 13.0761749,
+          "p99_ms": 13.608204789999998,
+          "standard_deviation_ms": 0.4830143655808339
+        }
+      },
+      "meets_20hz": true,
+      "peak_memory_allocated_bytes": 154144256,
+      "peak_memory_reserved_bytes": 448790528,
+      "run_id": "20260827T092033Z-pillar02-3367910930525d0c12ddc346",
+      "runtime_rank": 1,
+      "runtime_scope": "end_to_end_ms",
+      "runtime_statistic": "p95_ms",
+      "runtime_value": 15.003207,
+      "slug": "pillar02"
+    },
+    {
+      "accuracy_metric": "car_3d_ap40_moderate_strict",
+      "accuracy_rank": 1,
+      "accuracy_raw_key": "Kitti metric/pred_instances_3d/KITTI/Car_3D_AP40_moderate_strict",
+      "accuracy_value": 66.1696,
+      "ap40": {
+        "car_3d_ap40_easy_strict": 78.448,
+        "car_3d_ap40_hard_strict": 62.1959,
+        "car_3d_ap40_moderate_strict": 66.1696,
+        "car_bev_ap40_easy_strict": 88.0176,
+        "car_bev_ap40_hard_strict": 77.8536,
+        "car_bev_ap40_moderate_strict": 82.089
+      },
+      "benchmark_result_id": "20260901T104014393729Z-benchmark-8788ddfdc671d76144efcac4",
+      "checkpoint_sha256": "5246b24bfe66a81df3bc6ca94db982f0188b33043f25771c40d02be4bcb22507",
+      "checkpoint_size_bytes": 41175026,
+      "config_sha256": "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5",
+      "evaluation_result_id": "20260901T093742934083Z-evaluation-1da12da1dcea037b32fcd47a",
+      "latency_statistics": {
+        "end_to_end_ms": {
+          "max_ms": 48.713159,
+          "mean_ms": 33.180718134,
+          "min_ms": 29.927024,
+          "p50_ms": 32.899512,
+          "p95_ms": 35.330951699999986,
+          "p99_ms": 44.35268696,
+          "standard_deviation_ms": 2.0908732922935394
+        },
+        "prediction_ms": {
+          "max_ms": 46.111942,
+          "mean_ms": 31.521900396,
+          "min_ms": 28.48328,
+          "p50_ms": 31.246934,
+          "p95_ms": 33.65921684999999,
+          "p99_ms": 42.04389612999999,
+          "standard_deviation_ms": 1.994765806595596
+        }
+      },
+      "meets_20hz": true,
+      "peak_memory_allocated_bytes": 105315328,
+      "peak_memory_reserved_bytes": 178257920,
+      "run_id": "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc",
+      "runtime_rank": 3,
+      "runtime_scope": "end_to_end_ms",
+      "runtime_statistic": "p95_ms",
+      "runtime_value": 35.330951699999986,
+      "slug": "voxel0075"
+    },
+    {
+      "accuracy_metric": "car_3d_ap40_moderate_strict",
+      "accuracy_rank": 2,
+      "accuracy_raw_key": "Kitti metric/pred_instances_3d/KITTI/Car_3D_AP40_moderate_strict",
+      "accuracy_value": 65.8049,
+      "ap40": {
+        "car_3d_ap40_easy_strict": 77.2638,
+        "car_3d_ap40_hard_strict": 62.0019,
+        "car_3d_ap40_moderate_strict": 65.8049,
+        "car_bev_ap40_easy_strict": 87.5701,
+        "car_bev_ap40_hard_strict": 77.703,
+        "car_bev_ap40_moderate_strict": 80.0926
+      },
+      "benchmark_result_id": "20260902T083009602325Z-benchmark-f58a76e9462024acdb0df19e",
+      "checkpoint_sha256": "3e850ff7fc7e597971b028351a36257cd19b44a69770a5f6dda5222591e9c8c5",
+      "checkpoint_size_bytes": 46177522,
+      "config_sha256": "f42ba998b0756d880c37046fc1d76e5c1523aabd260dd87ac860171e2176025f",
+      "evaluation_result_id": "20260902T082628281593Z-evaluation-2fdaa37945bd2675c557dfef",
+      "latency_statistics": {
+        "end_to_end_ms": {
+          "max_ms": 54.200869,
+          "mean_ms": 34.635228322,
+          "min_ms": 31.101736,
+          "p50_ms": 33.9327765,
+          "p95_ms": 42.01694024999999,
+          "p99_ms": 48.72928533,
+          "standard_deviation_ms": 3.216299998598644
+        },
+        "prediction_ms": {
+          "max_ms": 50.716282,
+          "mean_ms": 32.747813597,
+          "min_ms": 29.549595,
+          "p50_ms": 32.0940195,
+          "p95_ms": 39.60685574999999,
+          "p99_ms": 46.96394742,
+          "standard_deviation_ms": 3.0912144998536033
+        }
+      },
+      "meets_20hz": true,
+      "peak_memory_allocated_bytes": 105315328,
+      "peak_memory_reserved_bytes": 178257920,
+      "run_id": "20260901T195406Z-voxel0075-duration30-2ad23907052ef315ba8f8675",
+      "runtime_rank": 4,
+      "runtime_scope": "end_to_end_ms",
+      "runtime_statistic": "p95_ms",
+      "runtime_value": 42.01694024999999,
+      "slug": "voxel0075-duration30"
+    },
+    {
+      "accuracy_metric": "car_3d_ap40_moderate_strict",
+      "accuracy_rank": 3,
+      "accuracy_raw_key": "Kitti metric/pred_instances_3d/KITTI/Car_3D_AP40_moderate_strict",
+      "accuracy_value": 59.3263,
+      "ap40": {
+        "car_3d_ap40_easy_strict": 73.2703,
+        "car_3d_ap40_hard_strict": 53.6976,
+        "car_3d_ap40_moderate_strict": 59.3263,
+        "car_bev_ap40_easy_strict": 87.7711,
+        "car_bev_ap40_hard_strict": 74.4106,
+        "car_bev_ap40_moderate_strict": 77.0989
+      },
+      "benchmark_result_id": "20260902T083106887597Z-benchmark-943a7b5978dd17570bd393c9",
+      "checkpoint_sha256": "2606a3448cd9edc97b662b0ea8631ea828ed1ba7fe64578bba1f2f5b650c8cac",
+      "checkpoint_size_bytes": 34256294,
+      "config_sha256": "ebed7d29b96cae0812ede9e572ffb1ba054d650ad62cb1c6c8895697fcb3a5d9",
+      "evaluation_result_id": "20260902T082842231699Z-evaluation-f67bfeac549a966c8ff58b73",
+      "latency_statistics": {
+        "end_to_end_ms": {
+          "max_ms": 36.061427,
+          "mean_ms": 14.45880732,
+          "min_ms": 12.198739,
+          "p50_ms": 14.415425500000001,
+          "p95_ms": 15.09185695,
+          "p99_ms": 15.841977449999996,
+          "standard_deviation_ms": 1.0808855295999489
+        },
+        "prediction_ms": {
+          "max_ms": 33.939491,
+          "mean_ms": 12.690117333,
+          "min_ms": 10.624435,
+          "p50_ms": 12.691533,
+          "p95_ms": 13.23189075,
+          "p99_ms": 13.58368153,
+          "standard_deviation_ms": 1.0203775816361647
+        }
+      },
+      "meets_20hz": true,
+      "peak_memory_allocated_bytes": 154144256,
+      "peak_memory_reserved_bytes": 448790528,
+      "run_id": "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6",
+      "runtime_rank": 2,
+      "runtime_scope": "end_to_end_ms",
+      "runtime_statistic": "p95_ms",
+      "runtime_value": 15.09185695,
+      "slug": "pillar02-duration30"
+    }
+  ],
+  "runtime_scope": "end_to_end_ms",
+  "runtime_statistic": "p95_ms",
+  "schema_version": 3,
+  "waivers": [
+    {
+      "field": "accuracy.dataset.version",
+      "reason": "KITTI release label is unrecorded; exact lidar-dataset-v2 identity and train/validation annotation hashes match across all four paired runs"
+    }
+  ]
+}
