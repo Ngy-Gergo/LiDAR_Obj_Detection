@@ -38,6 +38,22 @@ def test_multiclass_config_preserves_pillar_geometry_and_recipe() -> None:
     _validate_model_schema(config)
 
 
+def test_multiclass_catalog_validates_resolved_validation_annotation() -> None:
+    from mmengine.config import Config
+
+    from lidar_model_selection.training import _dataset_identity
+
+    config = Config.fromfile(CONFIG)
+    expected = DATA_ROOT / "kitti_infos_val.pkl"
+    assert config.val_evaluator.ann_file == str(expected)
+    assert config.test_evaluator.ann_file == str(expected)
+    identity = _dataset_identity(config, REPOSITORY_ROOT)
+    assert {item.path for item in identity.annotation_files.files} == {
+        "kitti_infos_train.pkl",
+        "kitti_infos_val.pkl",
+    }
+
+
 @pytest.mark.skipif(not DATA_ROOT.is_dir(), reason="read-only KITTI root unavailable")
 def test_multiclass_pipeline_retains_each_canonical_class() -> None:
     from mmengine.config import Config

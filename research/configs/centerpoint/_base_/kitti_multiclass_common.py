@@ -84,6 +84,8 @@ train_dataloader = dict(
 )
 val_dataloader = dict(dataset=dict(data_root=data_root, metainfo=metainfo))
 test_dataloader = val_dataloader
+val_evaluator = dict(ann_file=data_root + "kitti_infos_val.pkl")
+test_evaluator = dict(ann_file=data_root + "kitti_infos_val.pkl")
 
 learning_rate = 2.5e-4
 max_epochs = 60
