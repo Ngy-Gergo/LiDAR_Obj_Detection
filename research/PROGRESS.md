@@ -72,6 +72,26 @@ RTX 2080 Ti workstation; this preliminary result is not a low-end deployment
 claim. The report README records the exact metrics, methodology, hardware,
 dataset-version waiver, and study limitations.
 
+## Paired 30-epoch finalist screen
+
+The two fresh 30-epoch finalist runs completed cleanly and each produced one
+successful canonical evaluation and one successful synchronized benchmark from
+its recorded selected-best epoch-30 checkpoint. The immutable paired report is
+under [`reports/20260902-finalists-duration30/`](reports/20260902-finalists-duration30/).
+
+The 30-epoch `voxel0075` run reached 65.8049 moderate 3D AP40 versus 66.1696
+for its 20-epoch baseline, while end-to-end p95 rose from 35.3310 to 42.0169
+ms. The 30-epoch `pillar02` run improved moderate 3D AP40 from 55.1909 to
+59.3263 while end-to-end p95 changed only from 15.0032 to 15.0919 ms. Peak
+allocated/reserved GPU memory was unchanged within each architecture.
+
+The presentation accuracy checkpoint therefore remains the 20-epoch
+`voxel0075` selected-best artifact (`5246b24bfe66a81df3bc6ca94db982f0188b33043f25771c40d02be4bcb22507`),
+with the 30-epoch `pillar02` artifact retained as the improved low-latency
+fallback. No additional training was started. Presentation operating-point
+tuning and live Foxglove acceptance remain separate from this canonical
+post-training comparison.
+
 ## Validation
 
 Full real Python 3.10 environment command:
