@@ -19,6 +19,7 @@ _CONFIG_ROOT = _RESEARCH_ROOT / "configs" / "centerpoint"
 CENTERPOINT_CONFIGS: Mapping[str, Path] = MappingProxyType(
     {
         "pillar02": _CONFIG_ROOT / "pillar02.py",
+        "pillar02-multiclass": _CONFIG_ROOT / "pillar02_multiclass.py",
         "pillar02-dcn": _CONFIG_ROOT / "pillar02_dcn.py",
         "voxel0075": _CONFIG_ROOT / "voxel0075.py",
         "voxel0075-dcn": _CONFIG_ROOT / "voxel0075_dcn.py",

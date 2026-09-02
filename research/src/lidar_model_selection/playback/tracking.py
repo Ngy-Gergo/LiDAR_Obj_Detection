@@ -22,6 +22,11 @@ _SUCCESS_STATUSES = {
     "empty_after_range_filter",
 }
 _MAX_TRACK_ID = (1 << 31) - 1
+_CLASS_ASSOCIATION_DISTANCE_METERS = {
+    "Car": 4.0,
+    "Pedestrian": 1.5,
+    "Cyclist": 2.5,
+}
 
 
 def _positive_integer(value: object, name: str) -> int:
@@ -84,6 +89,14 @@ class TrackerConfig:
     position_smoothing: float = 0.65
     score_smoothing: float = 0.65
     trail_length: int = 20
+
+    def association_distance_for_class(self, class_name: str) -> float:
+        """Use fixed KITTI gates, preserving the global CLI fallback."""
+
+        return _CLASS_ASSOCIATION_DISTANCE_METERS.get(
+            class_name,
+            self.association_distance_meters,
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -195,6 +208,7 @@ class TrackedFrame:
     checkpoint_sha256: str
     tracks: tuple[TrackedBox, ...]
     diagnostics: TrackingDiagnostics
+    class_names: tuple[str, ...] = ("Car",)
 
     @property
     def visible_tracks(self) -> tuple[TrackedBox, ...]:
@@ -377,6 +391,7 @@ class OnlineBoxTracker:
             predicted_boxes,
             boxes,
             labels,
+            frame.class_names,
         )
         self._last_association_ms = max(
             0.0,
@@ -461,6 +476,7 @@ class OnlineBoxTracker:
             checkpoint_sha256=frame.checkpoint_sha256,
             tracks=tracks,
             diagnostics=self.snapshot(),
+            class_names=frame.class_names,
         )
 
     def _predicted_boxes(
@@ -486,6 +502,7 @@ class OnlineBoxTracker:
         predicted_boxes: np.ndarray,
         detections: np.ndarray,
         labels: np.ndarray,
+        class_names: tuple[str, ...],
     ) -> tuple[tuple[int, int], ...]:
         if not tracks or detections.shape[0] == 0:
             return ()
@@ -493,9 +510,14 @@ class OnlineBoxTracker:
         distance_squared = np.einsum("tni,tni->tn", delta, delta)
         track_labels = np.asarray([track.label for track in tracks], dtype=np.int64)
         compatible = track_labels[:, np.newaxis] == labels[np.newaxis, :]
-        gated = compatible & (
-            distance_squared <= self._config.association_distance_meters**2
+        gates = np.asarray(
+            [
+                self._config.association_distance_for_class(class_names[int(label)])
+                for label in labels
+            ],
+            dtype=np.float64,
         )
+        gated = compatible & (distance_squared <= gates[np.newaxis, :] ** 2)
         track_rows, detection_indices = np.nonzero(gated)
         if track_rows.size == 0:
             return ()

@@ -30,6 +30,8 @@ def _frame(
     boxes: list[tuple[float, float, float, float, float, float, float]],
     *,
     scores: list[float] | None = None,
+    labels: list[int] | None = None,
+    class_names: tuple[str, ...] = ("Car",),
     frame_index: int = 0,
 ) -> DetectionFrame:
     box_values = np.asarray(boxes, dtype=np.float32).reshape((-1, 7))
@@ -37,8 +39,10 @@ def _frame(
         scores if scores is not None else [0.8] * len(boxes),
         dtype=np.float32,
     )
-    labels = np.zeros((len(boxes),), dtype=np.int64)
-    for values in (box_values, score_values, labels):
+    label_values = np.asarray(
+        labels if labels is not None else [0] * len(boxes), dtype=np.int64
+    )
+    for values in (box_values, score_values, label_values):
         values.setflags(write=False)
     status = "success" if boxes else "empty_source"
     return DetectionFrame(
@@ -63,14 +67,127 @@ def _frame(
         status=status,
         boxes=box_values,
         scores=score_values,
-        labels=labels,
+        labels=label_values,
         decode_ms=1.0,
         detector_ms=2.0,
         frame_processing_ms=3.0,
+        class_names=class_names,
     )
 
 
 BOX = (1.0, 2.0, 0.0, 4.0, 2.0, 1.5, 0.0)
+MULTICLASS = ("Car", "Pedestrian", "Cyclist")
+
+
+def test_multiclass_tracks_are_stable_and_never_cross_class() -> None:
+    tracker = OnlineBoxTracker(TrackerConfig(min_confirmed_hits=1), model_alias="voxel0075")
+    first = [
+        (0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0),
+        (10.0, 0.0, 0.0, 0.6, 0.6, 1.7, 0.0),
+        (20.0, 0.0, 0.0, 1.8, 0.6, 1.6, 0.0),
+    ]
+    tracker.update(
+        _frame(1_000_000_000, first, labels=[0, 1, 2], class_names=MULTICLASS),
+        calibration=_calibration(), generation=0,
+    )
+    stable = tracker.update(
+        _frame(
+            1_100_000_000,
+            [(0.5, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0),
+             (10.5, 0.0, 0.0, 0.6, 0.6, 1.7, 0.0),
+             (21.0, 0.0, 0.0, 1.8, 0.6, 1.6, 0.0)],
+            labels=[0, 1, 2], class_names=MULTICLASS, frame_index=1,
+        ), calibration=_calibration(), generation=0,
+    )
+    assert [(track.track_id, track.label) for track in stable.tracks] == [
+        (1, 0), (2, 1), (3, 2)
+    ]
+    cross_class = tracker.update(
+        _frame(
+            1_200_000_000,
+            [(0.6, 0.0, 0.0, 0.6, 0.6, 1.7, 0.0)],
+            labels=[1], class_names=MULTICLASS, frame_index=2,
+        ), calibration=_calibration(), generation=0,
+    )
+    assert cross_class.diagnostics.matches == 0
+    assert any(track.label == 1 and track.track_id == 4 for track in cross_class.tracks)
+
+
+def test_class_specific_association_gates_and_unknown_fallback() -> None:
+    def paired(label: int, classes: tuple[str, ...], distance: float) -> int:
+        tracker = OnlineBoxTracker(TrackerConfig(min_confirmed_hits=1), model_alias="voxel0075")
+        tracker.update(
+            _frame(1_000_000_000, [BOX], labels=[label], class_names=classes),
+            calibration=_calibration(), generation=0,
+        )
+        result = tracker.update(
+            _frame(
+                1_100_000_000,
+                [(BOX[0] + distance, *BOX[1:])],
+                labels=[label], class_names=classes, frame_index=1,
+            ), calibration=_calibration(), generation=0,
+        )
+        return result.diagnostics.matches
+
+    assert paired(1, MULTICLASS, 1.6) == 0  # Pedestrian gate is 1.5 m.
+    assert paired(2, MULTICLASS, 2.4) == 1  # Cyclist gate is 2.5 m.
+    assert paired(2, MULTICLASS, 2.6) == 0
+    assert paired(0, MULTICLASS, 3.9) == 1  # Car gate remains 4.0 m.
+    assert paired(1, ("Car", "Unknown"), 3.9) == 1  # Global fallback.
+
+
+def test_crossing_pedestrians_keep_predicted_track_ids() -> None:
+    tracker = OnlineBoxTracker(
+        TrackerConfig(
+            min_confirmed_hits=1,
+            max_time_gap_seconds=2.0,
+            position_smoothing=1.0,
+        ),
+        model_alias="voxel0075",
+    )
+    def pedestrians(left: float, right: float):
+        return [
+            (left, 0.0, 0.0, 0.6, 0.6, 1.7, 0.0),
+            (right, 0.0, 0.0, 0.6, 0.6, 1.7, math.pi),
+        ]
+
+    tracker.update(
+        _frame(
+            1_000_000_000,
+            pedestrians(0.0, 2.0),
+            labels=[1, 1],
+            class_names=MULTICLASS,
+        ),
+        calibration=_calibration(),
+        generation=0,
+    )
+    tracker.update(
+        _frame(
+            1_100_000_000,
+            pedestrians(0.5, 1.5),
+            labels=[1, 1],
+            class_names=MULTICLASS,
+            frame_index=1,
+        ),
+        calibration=_calibration(),
+        generation=0,
+    )
+    crossed = tracker.update(
+        _frame(
+            1_200_000_000,
+            pedestrians(1.1, 0.9),
+            labels=[1, 1],
+            class_names=MULTICLASS,
+            frame_index=2,
+        ),
+        calibration=_calibration(),
+        generation=0,
+    )
+    assert [(track.track_id, track.label) for track in crossed.tracks] == [
+        (1, 1),
+        (2, 1),
+    ]
+    assert crossed.tracks[0].box[0] > crossed.tracks[1].box[0]
 
 
 def test_first_track_is_tentative_then_confirms_with_stable_id() -> None:

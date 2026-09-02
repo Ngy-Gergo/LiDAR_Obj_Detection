@@ -67,6 +67,14 @@ def _copied_header(types: RosMessageTypes, stamp: object, frame_id: str) -> obje
     return header
 
 
+def _class_name(class_names: tuple[str, ...], label: int) -> str:
+    """Resolve a prediction label through checkpoint-recorded metadata."""
+
+    if label < 0 or label >= len(class_names):
+        raise ValueError("prediction label is outside recorded class_names")
+    return class_names[label]
+
+
 class RosMessageBuilder:
     """Build standard detection, marker, diagnostic, and cloud messages."""
 
@@ -108,7 +116,9 @@ class RosMessageBuilder:
         message = self._types.Detection3DArray()
         message.header = _copied_header(self._types, stamp, self._base_frame)
         message.detections = []
-        for index, (box, score) in enumerate(zip(centered, result.scores)):
+        for index, (box, score, label_index) in enumerate(
+            zip(centered, result.scores, result.labels)
+        ):
             detection = self._types.Detection3D()
             detection.header = _copied_header(
                 self._types,
@@ -126,7 +136,10 @@ class RosMessageBuilder:
             detection.bbox.size.z = float(box[5])
 
             hypothesis = self._types.ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = "Car"
+            hypothesis.hypothesis.class_id = _class_name(
+                result.class_names,
+                int(label_index),
+            )
             hypothesis.hypothesis.score = float(score)
             hypothesis.pose.pose.position.x = float(box[0])
             hypothesis.pose.pose.position.y = float(box[1])
@@ -154,8 +167,8 @@ class RosMessageBuilder:
         red, green, blue = self.marker_color
         markers: list[object] = []
 
-        for index, (box_corners, box, score) in enumerate(
-            zip(corners, centered, result.scores)
+        for index, (box_corners, box, score, label_index) in enumerate(
+            zip(corners, centered, result.scores, result.labels)
         ):
             wire = self._types.Marker()
             wire.header = _copied_header(self._types, stamp, self._base_frame)
@@ -193,7 +206,11 @@ class RosMessageBuilder:
             label.color.g = green
             label.color.b = blue
             label.color.a = 1.0
-            label.text = f"{self._model_alias} Car {float(score):.2f}"
+            label.text = (
+                f"{self._model_alias} "
+                f"{_class_name(result.class_names, int(label_index))} "
+                f"{float(score):.2f}"
+            )
             markers.append(label)
 
         for stale_id in range(result.detection_count, previous_detection_count):
@@ -247,7 +264,10 @@ class RosMessageBuilder:
             detection.id = str(track.track_id)
             self._set_detection_box(detection, box)
             hypothesis = self._types.ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = "Car"
+            hypothesis.hypothesis.class_id = _class_name(
+                frame.class_names,
+                track.label,
+            )
             hypothesis.hypothesis.score = float(track.score)
             hypothesis.pose.pose.position.x = float(box[0])
             hypothesis.pose.pose.position.y = float(box[1])
@@ -320,7 +340,8 @@ class RosMessageBuilder:
             label.color.b = blue
             label.color.a = 0.55 if track.coasting else 1.0
             label.text = (
-                f"Car #{track.track_id} {track.score:.2f} "
+                f"{_class_name(frame.class_names, track.label)} "
+                f"#{track.track_id} {track.score:.2f} "
                 f"{speed:.1f} m/s {state}"
             )
             markers.append(label)
