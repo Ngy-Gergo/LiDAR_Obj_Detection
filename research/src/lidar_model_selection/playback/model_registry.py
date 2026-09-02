@@ -16,8 +16,19 @@ from ..runs import Run, load_run
 
 FINALIST_RUNS = {
     "voxel0075": "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc",
-    "pillar02": "20260827T092033Z-pillar02-3367910930525d0c12ddc346",
+    "pillar02": "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6",
 }
+
+_FINALIST_CONFIGS = MappingProxyType(
+    {
+        "voxel0075": (
+            "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5"
+        ),
+        "pillar02": (
+            "ebed7d29b96cae0812ede9e572ffb1ba054d650ad62cb1c6c8895697fcb3a5d9"
+        ),
+    }
+)
 
 _FINALIST_CHECKPOINTS = MappingProxyType(
     {
@@ -26,8 +37,8 @@ _FINALIST_CHECKPOINTS = MappingProxyType(
             "5246b24bfe66a81df3bc6ca94db982f0188b33043f25771c40d02be4bcb22507",
         ),
         "pillar02": (
-            29_277_286,
-            "7814db42c341be87c09ae4e68a0266288227aeac6a98cfb83420b4ffb5caaf8d",
+            34_256_294,
+            "2606a3448cd9edc97b662b0ea8631ea828ed1ba7fe64578bba1f2f5b650c8cac",
         ),
     }
 )
@@ -65,6 +76,7 @@ class FinalistSpec:
 
     model_alias: str
     run_id: str
+    config_sha256: str
     checkpoint_size_bytes: int
     checkpoint_sha256: str
 
@@ -114,6 +126,7 @@ def finalist_spec(model_alias: str) -> FinalistSpec:
     return FinalistSpec(
         model_alias=model_alias,
         run_id=FINALIST_RUNS[model_alias],
+        config_sha256=_FINALIST_CONFIGS[model_alias],
         checkpoint_size_bytes=checkpoint_size,
         checkpoint_sha256=checkpoint_sha256,
     )
@@ -146,6 +159,10 @@ def resolve_finalist(
         raise ValueError("finalist run must be the exact immediate child of runs_root")
     if loaded.manifest.origin != "native":
         raise ValueError("registered finalist must be a native canonical run")
+    if loaded.manifest.config.sha256 != spec.config_sha256:
+        raise ValueError(
+            "registered finalist config SHA-256 does not match the registry"
+        )
 
     selected = loaded.selected_checkpoint
     if selected is None:
@@ -173,6 +190,8 @@ def resolve_finalist(
     binding = binding_for_run(loaded)
     if binding.run_id != run_id:
         raise ValueError("finalist binding run identity does not match the registry")
+    if binding.config_sha256 != spec.config_sha256:
+        raise ValueError("finalist binding config does not match the registry")
     if binding.checkpoint_sha256 != expected_sha256:
         raise ValueError("finalist binding checkpoint does not match the registry")
 

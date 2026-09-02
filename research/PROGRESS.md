@@ -42,14 +42,15 @@ continuation did not revert to or reconstruct the legacy `main` architecture.
   generated-file, whitespace, CLI, grammar, and runtime-boundary reviews pass.
   No Manager/Service/Repository/Controller layers or competing Experiment
   concept were introduced.
-- **M10 — ROS2 playback adapter hardened; visual acceptance remains.** The
+- **M10 — complete.** The
   standard-message Foxglove adapter now has repository-owned complete
   `/tf_static` replay QoS, backward-clock generation/TF reset, lifecycle-safe
   shutdown, policy-matched PointCloud2 subscription depth, distinct middleware
   and application loss accounting, and stage-accurate live diagnostics. The
   July 27 synchronized LiDAR/camera acceptance procedure is documented in
-  [`docs/foxglove_playback.md`](../docs/foxglove_playback.md). This does not
-  claim that the remaining user-run GPU visual acceptance has passed.
+  [`docs/tracked_foxglove_demo.md`](../docs/tracked_foxglove_demo.md). The
+  final voxel 0.5×/1.0× checks, pillar smoke check, bounded MCAP recording,
+  detector-free replay, and clean shutdown checks passed on 2026-09-02.
 
 ## Fresh six-model campaign
 
@@ -88,9 +89,9 @@ allocated/reserved GPU memory was unchanged within each architecture.
 The presentation accuracy checkpoint therefore remains the 20-epoch
 `voxel0075` selected-best artifact (`5246b24bfe66a81df3bc6ca94db982f0188b33043f25771c40d02be4bcb22507`),
 with the 30-epoch `pillar02` artifact retained as the improved low-latency
-fallback. No additional training was started. Presentation operating-point
-tuning and live Foxglove acceptance remain separate from this canonical
-post-training comparison.
+fallback. No additional training was started. Live tracked playback acceptance
+subsequently retained the unchanged canonical NMS and 0.10 score threshold;
+it remains separate from the canonical post-training AP/latency comparison.
 
 ## Validation
 
@@ -109,6 +110,8 @@ Current post-campaign result: **406 passed, 0 failed, 0 skipped** in 16.73
 seconds.
 Current post-playback-hardening result: **550 passed, 0 failed, 0 skipped** in
 17.42 seconds.
+Final presentation integration result: **592 passed, 0 failed, 0 skipped** in
+27.91 seconds with `CUDA_VISIBLE_DEVICES=''`.
 
 Also passed:
 
@@ -133,11 +136,12 @@ Validated imports and real dataset access with:
 - MMDetection 3.3.0
 - MMDetection3D 1.4.0
 
-The Codex validation environment remains GPU-inaccessible. The completed
-campaign's immutable host-generated records, however, bind successful smoke,
-evaluation, and synchronized benchmark execution on an NVIDIA GeForce RTX 2080
-Ti with NVIDIA driver `575.57.08`. Historical imported evidence remains
-separate from these fresh results.
+The final integration completed live playback acceptance on an NVIDIA GeForce
+RTX 2080 Ti after all owner-managed training/evaluation processes had stopped.
+The immutable campaign records separately bind successful smoke, evaluation,
+and synchronized benchmark execution on the same GPU class with NVIDIA driver
+`575.57.08`. Historical imported evidence remains separate from these fresh
+results.
 
 ## Architecture review
 
@@ -156,11 +160,14 @@ No remaining production file appears bloated through unrelated ownership, and
 logic is not scattered across CLIs. Generated local runs and checkpoints remain
 ignored; tracked historical summaries/figures remain intentional evidence.
 
-## Next phase
+## Presentation release phase
 
-The next acceptance step is the documented host-GPU side-by-side Kaposvár
-bounding-box inspection using the working July 27 camera recording. Runtime
-comparison and detection-level tracking remain later work and are not part of
-the adapter hardening. TensorRT, loss changes, NuScenes training, multi-seed
-experiments, longer finalist training, and an official-pretrained checkpoint
-comparison remain explicitly deferred.
+The paired 30-epoch evaluation is complete. The protected presentation
+selection keeps the 20-epoch `voxel0075` checkpoint for accuracy and promotes
+the 30-epoch `pillar02` checkpoint to the low-latency fallback; see
+[`reports/20260902-finalists-duration30/`](reports/20260902-finalists-duration30/)
+and [`../docs/presentation_handoff.md`](../docs/presentation_handoff.md). No
+additional training was started. The documented host-GPU tracked Kaposvár
+playback acceptance and bounded fallback recording passed on 2026-09-02.
+TensorRT, loss changes, NuScenes training, multi-seed experiments, and an
+official-pretrained checkpoint comparison remain explicitly deferred.

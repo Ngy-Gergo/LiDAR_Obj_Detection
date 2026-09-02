@@ -87,3 +87,13 @@ already-resolved comparison rows; it performs no run or checkpoint discovery.
 
 See [research/PROGRESS.md](research/PROGRESS.md) for validated milestone state
 and [docs/architecture.md](docs/architecture.md) for responsibility boundaries.
+
+## Presentation demo
+
+The presentation path uses the protected 20-epoch `voxel0075` accuracy model,
+with the accepted 30-epoch `pillar02` model as its low-latency fallback. The
+single canonical tracked Foxglove launcher command, layout, reset behavior,
+and bounded fallback-recording procedure are in
+[docs/tracked_foxglove_demo.md](docs/tracked_foxglove_demo.md). Final model
+identities and canonical evidence are summarized in
+[docs/presentation_handoff.md](docs/presentation_handoff.md).

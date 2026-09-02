@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from lidar_model_selection.playback import ros2_node
+from lidar_model_selection.playback.tracking import TrackingDiagnostics
 
 
 RUNS_ROOT = Path("/home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs")
@@ -706,3 +707,48 @@ def test_tracking_failure_does_not_suppress_valid_raw_detector_output() -> None:
     assert node._failed_tracking_frames == 1
     assert "synthetic tracking failure" in node._last_tracking_error
     assert tracker_events == [("tracking failure", None)]
+
+
+def test_tracking_diagnostics_do_not_inherit_detector_middleware_warning() -> None:
+    runtime = _node_test_runtime({"value": True})
+    node = _bare_node(runtime)
+    node._tracker = SimpleNamespace(
+        snapshot=lambda: TrackingDiagnostics(
+            active_tracks=1,
+            confirmed_tracks=1,
+            tentative_tracks=0,
+            coasting_tracks=0,
+            created_tracks_total=1,
+            deleted_tracks_total=0,
+            created_tracks=0,
+            removed_tracks=0,
+            matches=1,
+            misses=0,
+            unmatched_detections=0,
+            unmatched_tracks=0,
+            reset_count=0,
+            last_reset_reason=None,
+            association_ms=0.1,
+            update_ms=0.2,
+            last_timestamp_ns=1,
+            last_dt_seconds=0.1,
+            maximum_observed_gap_seconds=0.1,
+            tracked_frames_total=2,
+        )
+    )
+    node._detector = SimpleNamespace(
+        identity=SimpleNamespace(run_id="run", checkpoint_sha256="a" * 64)
+    )
+    node._config = SimpleNamespace(model="voxel0075")
+    node._coordinator = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(
+            generation=0,
+            last_error_stage="middleware",
+            last_error_code="middleware_message_lost",
+            last_error_message="one sample lost",
+        )
+    )
+    node._failed_tracking_frames = 0
+    node._last_tracking_error = ""
+
+    assert node._tracking_values()["last_error"] == ""

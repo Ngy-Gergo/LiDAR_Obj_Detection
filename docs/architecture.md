@@ -38,6 +38,14 @@ its operational contract is documented in
 [`foxglove_playback.md`](foxglove_playback.md). It is an acceptance and
 presentation tool, not the vehicle runtime.
 
+The optional presentation tracker is pure Python state and association logic
+under `playback/tracking.py`; it does not import ROS2, CUDA, or model-loading
+code. `ros2_node.py` adapts its derived tracks to standard ROS messages while
+preserving raw detector outputs. `research/tools/foxglove_demo.py` owns only
+validated child-process orchestration. This separation keeps tracking,
+middleware conversion, detection, and launcher lifecycle independently
+testable without creating a second detector pipeline.
+
 ## Artifact boundary
 
 `artifacts/` is the only model hand-off between research and runtime. Binary

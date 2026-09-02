@@ -1016,15 +1016,6 @@ def _node_class(runtime: _RosRuntime) -> type:
             identity = self._detector.identity
             tracker = asdict(self._tracker.snapshot())
             coordinator = self._coordinator.snapshot()
-            last_error = ": ".join(
-                part
-                for part in (
-                    coordinator.last_error_stage,
-                    coordinator.last_error_code,
-                    coordinator.last_error_message,
-                )
-                if part
-            )
             return {
                 "model_alias": self._config.model,
                 "run_id": identity.run_id,
@@ -1054,7 +1045,10 @@ def _node_class(runtime: _RosRuntime) -> type:
                 ],
                 "tracked_frames_total": tracker["tracked_frames_total"],
                 "failed_tracking_frames": self._failed_tracking_frames,
-                "last_error": self._last_tracking_error or last_error,
+                # Coordinator input/queue/middleware errors belong to the raw
+                # detector diagnostic. They must not make a healthy tracker
+                # claim that tracking itself failed.
+                "last_error": self._last_tracking_error or "",
             }
 
         def _publish_diagnostics(self) -> None:

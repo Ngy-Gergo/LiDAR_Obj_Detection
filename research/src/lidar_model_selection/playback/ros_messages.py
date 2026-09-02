@@ -512,11 +512,16 @@ class RosMessageBuilder:
         message.header = _copied_header(self._types, stamp, self._base_frame)
         status = self._types.DiagnosticStatus()
         last_error = str(values.get("last_error", ""))
+        last_error_stage = str(values.get("last_error_stage", ""))
         failed = int(values.get("failed_frames", 0))
         dropped = int(values.get("dropped_frames", 0))
-        if last_error or failed:
+        middleware_lost = int(values.get("middleware_lost_frames", 0))
+        if failed or (last_error and last_error_stage != "middleware"):
             status.level = self._types.DiagnosticStatus.ERROR
             status.message = "frame processing failure"
+        elif middleware_lost:
+            status.level = self._types.DiagnosticStatus.WARN
+            status.message = "middleware messages lost"
         elif dropped:
             status.level = self._types.DiagnosticStatus.WARN
             status.message = "frames dropped or overwritten"

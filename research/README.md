@@ -37,3 +37,8 @@ checkpoint identities, immutable results, and pipeline records. Imported
 historical runs remain non-resumable and retain unknown provenance as unknown.
 
 Nothing in this package is part of the production vehicle runtime.
+
+The presentation-only recorded-data adapter, deterministic post-detection
+tracker, and orchestration launcher remain research tooling. Their canonical
+operating procedure is documented in
+[`../docs/tracked_foxglove_demo.md`](../docs/tracked_foxglove_demo.md).

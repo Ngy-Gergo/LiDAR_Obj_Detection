@@ -88,9 +88,10 @@ latency percentiles. Use the 30-epoch `pillar02` selected-best checkpoint as
 the low-latency fallback: it preserves approximately 15.09 ms end-to-end p95
 while materially improving all six requested AP40 values over its baseline.
 
-No additional training run was started. No tracker branch was merged or
-modified. Canonical score/NMS settings remain unchanged; presentation-specific
-operating-point tuning and live Foxglove acceptance are separate pending work.
+No additional training run was started. Canonical score/NMS settings remain
+unchanged. The later integration acceptance retained the documented 0.10
+presentation threshold and did not reinterpret it as an AP optimum; see
+[`../../../docs/presentation_handoff.md`](../../../docs/presentation_handoff.md).
 
 ## Validation
 

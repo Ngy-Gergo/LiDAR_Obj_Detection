@@ -173,7 +173,9 @@ def _build_detector(
 def test_finalist_registry_is_closed_and_exact() -> None:
     assert FINALIST_RUNS == {
         "voxel0075": _VOXEL_RUN_ID,
-        "pillar02": "20260827T092033Z-pillar02-3367910930525d0c12ddc346",
+        "pillar02": (
+            "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6"
+        ),
     }
     with pytest.raises(ValueError, match="unknown finalist model alias"):
         resolve_finalist("arbitrary-run", "/runs")
@@ -191,9 +193,12 @@ def test_finalist_spec_is_lightweight_and_does_not_touch_run_files(
     spec = finalist_spec("pillar02")
 
     assert spec.run_id == FINALIST_RUNS["pillar02"]
-    assert spec.checkpoint_size_bytes == 29_277_286
+    assert spec.config_sha256 == (
+        "ebed7d29b96cae0812ede9e572ffb1ba054d650ad62cb1c6c8895697fcb3a5d9"
+    )
+    assert spec.checkpoint_size_bytes == 34_256_294
     assert spec.checkpoint_sha256 == (
-        "7814db42c341be87c09ae4e68a0266288227aeac6a98cfb83420b4ffb5caaf8d"
+        "2606a3448cd9edc97b662b0ea8631ea828ed1ba7fe64578bba1f2f5b650c8cac"
     )
 
 
@@ -214,10 +219,21 @@ def test_registry_resolves_only_matching_canonical_artifacts(
     loaded = types.SimpleNamespace(
         run_id=_VOXEL_RUN_ID,
         paths=types.SimpleNamespace(root=run_root, config=run_root / "config.py"),
-        manifest=types.SimpleNamespace(origin="native"),
+        manifest=types.SimpleNamespace(
+            origin="native",
+            config=types.SimpleNamespace(
+                sha256=(
+                    "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5"
+                )
+            ),
+        ),
         selected_checkpoint=selected,
     )
-    binding = ResultBinding(_VOXEL_RUN_ID, "a" * 64, _VOXEL_SHA256)
+    binding = ResultBinding(
+        _VOXEL_RUN_ID,
+        "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5",
+        _VOXEL_SHA256,
+    )
     roots: list[Path] = []
 
     monkeypatch.setattr(registry_module, "load_run", lambda path: loaded)
@@ -236,6 +252,13 @@ def test_registry_resolves_only_matching_canonical_artifacts(
     assert identity.checkpoint_size_bytes == 41_175_026
     assert identity.checkpoint_path == run_root / "training" / "selected.pth"
     assert roots == [run_root]
+
+    loaded.manifest.config.sha256 = "b" * 64
+    with pytest.raises(ValueError, match="config SHA-256 does not match"):
+        resolve_finalist("voxel0075", runs_root)
+    loaded.manifest.config.sha256 = (
+        "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5"
+    )
 
     selected = types.SimpleNamespace(
         path="training/selected.pth",

@@ -273,8 +273,25 @@ def test_diagnostics_preserve_byte_level_and_all_values() -> None:
         stamp=STAMP,
     )
     assert warning.status[0].level == b"\x01"
+    middleware_warning = builder.diagnostic_array(
+        {
+            "failed_frames": 0,
+            "dropped_frames": 0,
+            "middleware_lost_frames": 2,
+            "last_error_stage": "middleware",
+            "last_error": "middleware: middleware_message_lost: sequence gap",
+        },
+        stamp=STAMP,
+    )
+    assert middleware_warning.status[0].level == b"\x01"
+    assert middleware_warning.status[0].message == "middleware messages lost"
     failure = builder.diagnostic_array(
-        {"failed_frames": 1, "dropped_frames": 0, "last_error": "bad cloud"},
+        {
+            "failed_frames": 1,
+            "dropped_frames": 0,
+            "last_error_stage": "input",
+            "last_error": "bad cloud",
+        },
         stamp=STAMP,
     )
     assert failure.status[0].level == b"\x02"

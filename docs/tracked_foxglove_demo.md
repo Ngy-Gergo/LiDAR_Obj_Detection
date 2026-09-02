@@ -11,10 +11,9 @@ and invoke the repository launcher from the repository that contains the code
 you intend to present:
 
 ```bash
-cd /tmp/lidar-centerpoint-presentation-final-711e4f
+cd /home/ws-rtx/Documents/Projects/lidar-centerpoint
 source /opt/ros/humble/setup.bash
-PYTHONPATH=research/src:runtime \
-  /home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
+/home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
   research/tools/foxglove_demo.py \
   --model voxel0075 \
   --device cuda:0 \
@@ -36,7 +35,7 @@ Foxglove: ws://localhost:8765
 Fixed frame: lexus3/base_link
 ```
 
-`Ctrl-C` stops the detector first, then bag playback, then the bridge. Each
+`Ctrl-C` stops bag input first, then the detector, then the bridge. Each
 child runs in its own process group and escalates from `SIGINT` to `SIGTERM`
 and finally `SIGKILL` only if a process does not stop within its bounded
 grace period.
@@ -45,9 +44,10 @@ grace period.
 detector registry. `--checkpoint-sha256` optionally pins that registry
 selection and is rejected before model construction if it does not match; it
 does not bypass run or checkpoint verification with an arbitrary path. The
-current registry selects the immutable 20-epoch voxel finalist. A later
-accepted final run can be selected in the existing registry without changing
-launcher or tracker logic.
+final registry selects the immutable 20-epoch voxel accuracy model and the
+accepted 30-epoch pillar low-latency fallback. The same launcher and tracker
+logic serve both aliases while enforcing their distinct run, config, and
+checkpoint identities.
 
 Inspect the exact shell-escaped child commands without requiring ROS, a bag,
 or a GPU by adding `--dry-run` (alias `--print-command`). If a bridge or bag is
@@ -151,14 +151,25 @@ CUDA_VISIBLE_DEVICES='' PYTHONPATH=research/src \
 The tool reports p50, p95, and maximum update latency. Its 2 ms target is
 reported as evidence, not enforced as a machine-dependent CI assertion.
 
-## Record a short fallback MCAP
+## Validated fallback MCAP
 
-Do this later while the live tracked demo is healthy. First preflight free
-space and confirm that the explicit new output directory does not exist:
+The accepted 2026-09-02 recording is:
+
+```text
+/media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902T091653Z
+```
+
+It is a finalized 29.342-second MCAP containing 4,651 messages on all 13
+required input/output topics. Its MCAP file is 465,330,549 bytes (`443.8 MiB`;
+directory size `444M`). It replayed through Foxglove Bridge with only
+`rosbag2_player` present, `CUDA_VISIBLE_DEVICES=''`, and no detector process.
+
+For any replacement recording, first preflight free space and choose a new
+explicitly timestamped sibling. Never reuse the accepted directory:
 
 ```bash
 df -h /media/ws-rtx/datastore1
-test ! -e /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902
+test ! -e /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_NEW_UTC_TIMESTAMP
 mkdir -p /media/ws-rtx/datastore1/centerpoint_presentation_demos
 ```
 
@@ -169,7 +180,7 @@ source /opt/ros/humble/setup.bash
 timeout --signal=INT --kill-after=10s 30s \
   ros2 bag record \
   --storage mcap \
-  --output /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902 \
+  --output /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_NEW_UTC_TIMESTAMP \
   --qos-profile-overrides-path /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/configs/playback/rosbag2_qos.yaml \
   /clock \
   /tf \
@@ -191,7 +202,7 @@ can also stop earlier with `Ctrl-C`. Confirm `metadata.yaml` exists before
 using the recording, then validate finalization and topic coverage:
 
 ```bash
-ros2 bag info /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902
+ros2 bag info /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_NEW_UTC_TIMESTAMP
 ```
 
 Replay the fallback without a detector or GPU by starting Foxglove Bridge
@@ -200,7 +211,7 @@ first and then running:
 ```bash
 source /opt/ros/humble/setup.bash
 ros2 bag play \
-  /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902 \
+  /media/ws-rtx/datastore1/centerpoint_presentation_demos/voxel0075_tracked_20260902T091653Z \
   --storage mcap \
   --rate 0.5 \
   --loop \
@@ -227,11 +238,11 @@ tracking validation.
 This is post-detection temporal stabilization and identity continuity. It does
 not fuse the camera, alter detector AP, add learned temporal memory, or make
 validation-set measurements equivalent to untouched test performance. The
-protected finalist registry continues to select and hash-check the checkpoint;
-`--runs-root` selects its immutable artifact root and `--checkpoint-sha256`
-pins the selected identity. Register a newly accepted finalist through the
-existing evidence-reviewed registry rather than bypassing checkpoint
-verification with an arbitrary path.
+protected finalist registry continues to select and hash-check the config and
+checkpoint; `--runs-root` selects its immutable artifact root and
+`--checkpoint-sha256` pins the selected checkpoint identity. Register any
+future accepted finalist through the evidence-reviewed registry rather than
+bypassing verification with an arbitrary path.
 
 Post-presentation work: evaluate multi-sweep input and learned BEV memory;
 extract a smaller deployment package; perform the broader runtime/research
