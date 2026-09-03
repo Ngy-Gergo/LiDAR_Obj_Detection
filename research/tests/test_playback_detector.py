@@ -16,6 +16,7 @@ from lidar_model_selection.playback.detector import FinalistDetector
 from lidar_model_selection.playback.model_registry import (
     FINALIST_RUNS,
     FinalistModelIdentity,
+    finalist_class_names,
     finalist_spec,
     resolve_finalist,
 )
@@ -176,6 +177,9 @@ def test_finalist_registry_is_closed_and_exact() -> None:
         "pillar02": (
             "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6"
         ),
+        "pillar02_multiclass": (
+            "20260902T125737Z-pillar02-multiclass-faa487143efbe3dba808d9ac"
+        ),
     }
     with pytest.raises(ValueError, match="unknown finalist model alias"):
         resolve_finalist("arbitrary-run", "/runs")
@@ -199,6 +203,24 @@ def test_finalist_spec_is_lightweight_and_does_not_touch_run_files(
     assert spec.checkpoint_size_bytes == 34_256_294
     assert spec.checkpoint_sha256 == (
         "2606a3448cd9edc97b662b0ea8631ea828ed1ba7fe64578bba1f2f5b650c8cac"
+    )
+
+
+def test_multiclass_finalist_spec_has_exact_runtime_classes() -> None:
+    spec = finalist_spec("pillar02_multiclass")
+
+    assert spec.run_id == FINALIST_RUNS["pillar02_multiclass"]
+    assert spec.config_sha256 == (
+        "b31131058eb44367a6d7daa7a3ee0620d41cf3324fdfd701f1f41d402a50231d"
+    )
+    assert spec.checkpoint_size_bytes == 32_452_134
+    assert spec.checkpoint_sha256 == (
+        "cf62f3c99ce8ebdbb96eaa467cc44c3bde0a152aa25470ce1cfd11b8ac7c7427"
+    )
+    assert finalist_class_names("pillar02_multiclass") == (
+        "Car",
+        "Pedestrian",
+        "Cyclist",
     )
 
 
@@ -226,6 +248,7 @@ def test_registry_resolves_only_matching_canonical_artifacts(
                     "723749a5dc262ed1e57304092f12694d8f062c4a4158e2d65be685a47874c1b5"
                 )
             ),
+            dataset=types.SimpleNamespace(class_names=("Car",)),
         ),
         selected_checkpoint=selected,
     )

@@ -38,6 +38,13 @@ _BOX_EDGES = (
 _MARKER_COLORS = {
     "voxel0075": (0.0, 0.78, 1.0),
     "pillar02": (1.0, 0.48, 0.0),
+    "pillar02_multiclass": (1.0, 0.48, 0.0),
+}
+
+_MULTICLASS_MARKER_COLORS = {
+    "Car": (1.0, 0.48, 0.0),
+    "Pedestrian": (0.0, 0.78, 1.0),
+    "Cyclist": (0.76, 0.31, 0.96),
 }
 
 
@@ -96,6 +103,21 @@ class RosMessageBuilder:
     @property
     def marker_color(self) -> tuple[float, float, float]:
         return _MARKER_COLORS[self._model_alias]
+
+    def _marker_color_for_label(
+        self,
+        class_names: tuple[str, ...],
+        label: int,
+    ) -> tuple[float, float, float]:
+        class_name = _class_name(class_names, label)
+        if self._model_alias != "pillar02_multiclass":
+            return self.marker_color
+        try:
+            return _MULTICLASS_MARKER_COLORS[class_name]
+        except KeyError as error:
+            raise ValueError(
+                "pillar02_multiclass marker class is not registered"
+            ) from error
 
     def _require_result_identity(self, result: DetectionFrame) -> None:
         if not isinstance(result, DetectionFrame):
@@ -164,12 +186,15 @@ class RosMessageBuilder:
         boxes = boxes_to_base_frame(result.boxes, calibration)
         centered = bottom_to_center(boxes)
         corners = box_corners_3d(boxes)
-        red, green, blue = self.marker_color
         markers: list[object] = []
 
         for index, (box_corners, box, score, label_index) in enumerate(
             zip(corners, centered, result.scores, result.labels)
         ):
+            red, green, blue = self._marker_color_for_label(
+                result.class_names,
+                int(label_index),
+            )
             wire = self._types.Marker()
             wire.header = _copied_header(self._types, stamp, self._base_frame)
             wire.ns = f"{self._model_alias}/boxes"
@@ -295,10 +320,13 @@ class RosMessageBuilder:
             for track_id in previous_track_ids
         ):
             raise ValueError("previous_track_ids must contain positive integers")
-        red, green, blue = self.marker_color
         markers: list[object] = []
         visible_ids: set[int] = set()
         for track in frame.visible_tracks:
+            red, green, blue = self._marker_color_for_label(
+                frame.class_names,
+                track.label,
+            )
             visible_ids.add(track.track_id)
             box_values = np.asarray((track.box,), dtype=np.float64)
             centered = bottom_to_center(box_values)[0]

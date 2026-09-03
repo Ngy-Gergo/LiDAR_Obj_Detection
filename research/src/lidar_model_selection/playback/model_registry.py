@@ -17,6 +17,9 @@ from ..runs import Run, load_run
 FINALIST_RUNS = {
     "voxel0075": "20260827T092043Z-voxel0075-e583a40f435e3071e0cbd6fc",
     "pillar02": "20260901T195416Z-pillar02-duration30-2720f37cf422c4e55bafd0a6",
+    "pillar02_multiclass": (
+        "20260902T125737Z-pillar02-multiclass-faa487143efbe3dba808d9ac"
+    ),
 }
 
 _FINALIST_CONFIGS = MappingProxyType(
@@ -26,6 +29,9 @@ _FINALIST_CONFIGS = MappingProxyType(
         ),
         "pillar02": (
             "ebed7d29b96cae0812ede9e572ffb1ba054d650ad62cb1c6c8895697fcb3a5d9"
+        ),
+        "pillar02_multiclass": (
+            "b31131058eb44367a6d7daa7a3ee0620d41cf3324fdfd701f1f41d402a50231d"
         ),
     }
 )
@@ -40,6 +46,18 @@ _FINALIST_CHECKPOINTS = MappingProxyType(
             34_256_294,
             "2606a3448cd9edc97b662b0ea8631ea828ed1ba7fe64578bba1f2f5b650c8cac",
         ),
+        "pillar02_multiclass": (
+            32_452_134,
+            "cf62f3c99ce8ebdbb96eaa467cc44c3bde0a152aa25470ce1cfd11b8ac7c7427",
+        ),
+    }
+)
+
+_FINALIST_CLASS_NAMES = MappingProxyType(
+    {
+        "voxel0075": ("Car",),
+        "pillar02": ("Car",),
+        "pillar02_multiclass": ("Car", "Pedestrian", "Cyclist"),
     }
 )
 
@@ -112,6 +130,13 @@ def finalist_aliases() -> tuple[str, ...]:
     return tuple(FINALIST_RUNS)
 
 
+def finalist_class_names(model_alias: str) -> tuple[str, ...]:
+    """Return the exact checkpoint-recorded classes for a finalist."""
+
+    finalist_spec(model_alias)
+    return _FINALIST_CLASS_NAMES[model_alias]
+
+
 def finalist_spec(model_alias: str) -> FinalistSpec:
     """Return declared identity without loading or verifying any artifact."""
 
@@ -162,6 +187,10 @@ def resolve_finalist(
     if loaded.manifest.config.sha256 != spec.config_sha256:
         raise ValueError(
             "registered finalist config SHA-256 does not match the registry"
+        )
+    if tuple(loaded.manifest.dataset.class_names) != finalist_class_names(model_alias):
+        raise ValueError(
+            "registered finalist dataset classes do not match the registry"
         )
 
     selected = loaded.selected_checkpoint
