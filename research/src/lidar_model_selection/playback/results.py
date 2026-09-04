@@ -153,6 +153,7 @@ class DetectionFrame:
     frame_processing_ms: float
     pacing_lag_ms: float = 0.0
     errors: tuple[PlaybackErrorEvidence, ...] = ()
+    class_names: tuple[str, ...] = ("Car",)
 
     @property
     def normalized_point_count(self) -> int | None:
@@ -171,6 +172,16 @@ class DetectionFrame:
             "status",
         ):
             _require_text(getattr(self, field), description=field)
+        if (
+            not isinstance(self.class_names, tuple)
+            or not self.class_names
+            or any(
+                not isinstance(name, str) or not name or name.strip() != name
+                for name in self.class_names
+            )
+            or len(set(self.class_names)) != len(self.class_names)
+        ):
+            raise ValueError("class_names must be a non-empty canonical tuple")
         for field in ("source_frame_id", "coordinate_frame", "source_key"):
             value = getattr(self, field)
             if value is not None:
@@ -294,8 +305,10 @@ class DetectionFrame:
             (self.scores >= 0.0) & (self.scores <= 1.0)
         ).all():
             raise ValueError("scores must be in the closed interval [0, 1]")
-        if self.detection_count and not (self.labels == 0).all():
-            raise ValueError("all finalist labels must be the single class 0")
+        if self.detection_count and not (
+            (self.labels >= 0) & (self.labels < len(self.class_names))
+        ).all():
+            raise ValueError("prediction labels must be within class_names")
         if self.status.startswith("empty_") and self.detection_count != 0:
             raise ValueError("empty frame statuses must not contain detections")
 

@@ -82,6 +82,12 @@ _PROTECTED_OVERRIDE_KEYS = frozenset(
     {"work_dir", "load_from", "resume", "launcher", "train_cfg.max_epochs"}
 )
 _MISSING = object()
+_SUPPORTED_CLASS_SCHEMAS = frozenset(
+    {
+        ("Car",),
+        ("Car", "Pedestrian", "Cyclist"),
+    }
+)
 
 
 def _absolute(path: Path | str) -> Path:
@@ -194,8 +200,11 @@ def _classes(value: object, *, description: str) -> tuple[str, ...]:
 
 def _validate_model_schema(config: object) -> None:
     class_names = _classes(_value(config, "class_names"), description="class_names")
-    if class_names != ("Car",):
-        raise ValueError("native training requires the KITTI Car-only class schema")
+    if class_names not in _SUPPORTED_CLASS_SCHEMAS:
+        raise ValueError(
+            "native training requires either the KITTI Car-only class schema "
+            "or the canonical (Car, Pedestrian, Cyclist) class schema"
+        )
 
     head = _nested(config, "model", "pts_bbox_head")
     if _nested(head, "bbox_coder", "code_size") != 7:
@@ -204,10 +213,15 @@ def _validate_model_schema(config: object) -> None:
     if not isinstance(tasks, (tuple, list)) or len(tasks) != 1:
         raise ValueError("native training requires exactly one model task")
     task = tasks[0]
-    if _classes(_value(task, "class_names"), description="task classes") != (
-        "Car",
-    ) or _value(task, "num_class", 1) != 1:
-        raise ValueError("native training model task must be Car-only")
+    if (
+        _classes(_value(task, "class_names"), description="task classes")
+        != class_names
+        or _value(task, "num_class", None) != len(class_names)
+    ):
+        raise ValueError(
+            "native training model task classes and num_class must match "
+            "the canonical dataset schema"
+        )
 
     custom_imports = _value(config, "custom_imports", None)
     imports = () if custom_imports is None else _value(custom_imports, "imports", ())
@@ -225,6 +239,9 @@ def _dataset_identity(
     recorded_root: str | None = None,
     scheme: str = DATASET_IDENTITY_SCHEME,
 ) -> DatasetIdentity:
+    class_names = _classes(_value(config, "class_names"), description="class_names")
+    if class_names not in _SUPPORTED_CLASS_SCHEMAS:
+        raise ValueError("dataset identity uses an unsupported class schema")
     train = _dataset_config(config, "train_dataloader")
     validation = _dataset_config(config, "val_dataloader")
     test = _dataset_config(config, "test_dataloader")
@@ -242,10 +259,13 @@ def _dataset_identity(
                 f"{description} dataset test_mode must be {expected_test_mode}"
             )
         metainfo = _value(dataset, "metainfo")
-        if _classes(_value(metainfo, "classes"), description="dataset classes") != (
-            "Car",
+        if (
+            _classes(_value(metainfo, "classes"), description="dataset classes")
+            != class_names
         ):
-            raise ValueError(f"{description} dataset must be Car-only")
+            raise ValueError(
+                f"{description} dataset classes must match the model class schema"
+            )
 
     train_root = _string(_value(train, "data_root"), description="training data_root")
     validation_root = _string(
@@ -308,8 +328,8 @@ def _dataset_identity(
         semantic_partition="KITTI validation",
         framework_key="test_dataloader",
         annotation_files=annotation_files,
-        class_names=("Car",),
-        tasks={"3d_object_detection_7d": ("Car",)},
+        class_names=class_names,
+        tasks={"3d_object_detection_7d": class_names},
         scheme=scheme,
     )
 

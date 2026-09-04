@@ -238,6 +238,124 @@ def test_wireframe_labels_colors_and_stale_marker_deletion() -> None:
         )
 
 
+def test_multiclass_ros_labels_follow_detection_metadata() -> None:
+    result = _result()
+    labels = np.array([1], dtype=np.int64)
+    labels.setflags(write=False)
+    result = result.__class__(
+        **{
+            field: getattr(result, field)
+            for field in result.__dataclass_fields__
+            if field not in {"labels", "class_names"}
+        },
+        labels=labels,
+        class_names=("Car", "Pedestrian", "Cyclist"),
+    )
+    builder = RosMessageBuilder(TYPES, model_alias="voxel0075", base_frame="lexus3/base_link")
+    detections = builder.detection_array(result, stamp=STAMP, calibration=_calibration())
+    markers = builder.marker_array(
+        result, stamp=STAMP, calibration=_calibration(), previous_detection_count=0
+    )
+    assert detections.detections[0].results[0].hypothesis.class_id == "Pedestrian"
+    assert markers.markers[1].text == "voxel0075 Pedestrian 0.88"
+
+
+def test_multiclass_alias_uses_distinct_class_marker_colors() -> None:
+    result = _result()
+    boxes = np.repeat(result.boxes, 3, axis=0)
+    scores = np.repeat(result.scores, 3)
+    labels = np.array([0, 1, 2], dtype=np.int64)
+    for values in (boxes, scores, labels):
+        values.setflags(write=False)
+    result = result.__class__(
+        **{
+            field: getattr(result, field)
+            for field in result.__dataclass_fields__
+            if field
+            not in {
+                "boxes",
+                "scores",
+                "labels",
+                "class_names",
+                "model_alias",
+                "detection_count",
+            }
+        },
+        boxes=boxes,
+        scores=scores,
+        labels=labels,
+        class_names=("Car", "Pedestrian", "Cyclist"),
+        model_alias="pillar02_multiclass",
+        detection_count=3,
+    )
+    builder = RosMessageBuilder(
+        TYPES,
+        model_alias="pillar02_multiclass",
+        base_frame="lexus3/base_link",
+    )
+    detections = builder.detection_array(result, stamp=STAMP, calibration=_calibration())
+    markers = builder.marker_array(
+        result, stamp=STAMP, calibration=_calibration(), previous_detection_count=0
+    ).markers
+
+    assert [
+        detection.results[0].hypothesis.class_id for detection in detections.detections
+    ] == ["Car", "Pedestrian", "Cyclist"]
+    assert [marker.text for marker in markers if marker.ns.endswith("/labels")] == [
+        "pillar02_multiclass Car 0.88",
+        "pillar02_multiclass Pedestrian 0.88",
+        "pillar02_multiclass Cyclist 0.88",
+    ]
+    colors = [
+        (marker.color.r, marker.color.g, marker.color.b)
+        for marker in markers
+        if marker.ns.endswith("/boxes")
+    ]
+    assert colors == [(1.0, 0.48, 0.0), (0.0, 0.78, 1.0), (0.76, 0.31, 0.96)]
+
+
+def test_multiclass_tracked_labels_keep_class_and_stable_id() -> None:
+    builder = RosMessageBuilder(
+        TYPES,
+        model_alias="pillar02_multiclass",
+        base_frame="lexus3/base_link",
+    )
+    track = _track(12, coasting=False)
+    track = track.__class__(
+        **{
+            field: getattr(track, field)
+            for field in track.__dataclass_fields__
+            if field != "label"
+        },
+        label=2,
+    )
+    frame = _tracked_frame(tracks=(track,))
+    frame = frame.__class__(
+        **{
+            field: getattr(frame, field)
+            for field in frame.__dataclass_fields__
+            if field not in {"class_names", "model_alias"}
+        },
+        class_names=("Car", "Pedestrian", "Cyclist"),
+        model_alias="pillar02_multiclass",
+    )
+    detections = builder.tracked_detection_array(frame, stamp=STAMP)
+    markers = builder.tracked_marker_array(
+        frame,
+        stamp=STAMP,
+        previous_track_ids=set(),
+    ).markers
+    labels = [marker for marker in markers if marker.ns.endswith("tracked_labels")]
+    assert detections.detections[0].id == "12"
+    assert detections.detections[0].results[0].hypothesis.class_id == "Cyclist"
+    assert labels[0].text == "Cyclist #12 0.88 2.0 m/s fresh"
+    assert (markers[0].color.r, markers[0].color.g, markers[0].color.b) == (
+        0.76,
+        0.31,
+        0.96,
+    )
+
+
 def test_model_cloud_filters_strict_range_and_translates_visual_copy() -> None:
     points = np.array(
         [

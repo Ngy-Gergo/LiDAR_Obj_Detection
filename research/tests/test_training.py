@@ -119,6 +119,7 @@ def test_catalog_is_exact_fixed_slug_to_source_mapping() -> None:
     assert catalog.catalog_slugs() == (
         "pillar02",
         "pillar02-dcn",
+        "pillar02-multiclass",
         "voxel0075",
         "voxel0075-dcn",
         "voxel01",

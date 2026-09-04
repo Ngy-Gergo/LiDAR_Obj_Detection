@@ -83,7 +83,7 @@ def test_launcher_parser_supports_existing_bridge_and_bag(tmp_path: Path) -> Non
     config = foxglove_demo.parse_args(
         [
             "--model",
-            "pillar02",
+            "pillar02_multiclass",
             "--device",
             "cuda:1",
             "--bag",
@@ -101,7 +101,7 @@ def test_launcher_parser_supports_existing_bridge_and_bag(tmp_path: Path) -> Non
             "1",
         ]
     )
-    assert config.model == "pillar02"
+    assert config.model == "pillar02_multiclass"
     assert config.device == "cuda:1"
     assert config.enable_tracking
     assert not config.start_bridge

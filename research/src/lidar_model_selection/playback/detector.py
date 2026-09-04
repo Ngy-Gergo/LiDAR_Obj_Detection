@@ -280,7 +280,14 @@ def _validated_prediction_arrays(
     result: Any,
     *,
     score_threshold: float,
+    class_names: tuple[str, ...] = ("Car",),
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if (
+        not isinstance(class_names, tuple)
+        or not class_names
+        or any(not isinstance(name, str) or not name for name in class_names)
+    ):
+        raise ValueError("class_names must be a non-empty tuple of strings")
     try:
         predictions = result.pred_instances_3d
         raw_boxes = predictions.bboxes_3d.tensor
@@ -333,8 +340,12 @@ def _validated_prediction_arrays(
     # Boolean indexing retains upstream order, which is the required stable
     # ordering after the user-level score threshold is applied.
     selected = scores >= score_threshold
-    if labels[selected].shape[0] and not (labels[selected] == 0).all():
-        raise ValueError("retained finalist prediction labels must all equal class 0")
+    if labels[selected].shape[0] and not (
+        (labels[selected] >= 0) & (labels[selected] < len(class_names))
+    ).all():
+        if class_names == ("Car",):
+            raise ValueError("retained finalist prediction labels must all equal class 0")
+        raise ValueError("retained prediction labels are outside model class_names")
     with np.errstate(over="ignore", invalid="ignore"):
         kept_boxes = np.array(
             boxes[selected],
@@ -401,6 +412,11 @@ class FinalistDetector:
             raise ValueError("initialized finalist model has no parameter device") from error
 
         self._identity = current
+        dataset = getattr(getattr(current.run, "manifest", None), "dataset", None)
+        class_names = tuple(getattr(dataset, "class_names", ("Car",)) or ())
+        if not class_names:
+            raise ValueError("registered finalist has no dataset class metadata")
+        self._class_names = class_names
         self._score_threshold = threshold
         self._device = selected_device
         self._torch = torch
@@ -442,6 +458,12 @@ class FinalistDetector:
     def device(self) -> str:
         return self._device
 
+    @property
+    def class_names(self) -> tuple[str, ...]:
+        """Canonical class metadata recorded with this selected checkpoint."""
+
+        return self._class_names
+
     def _result(
         self,
         frame: PointCloudFrame,
@@ -480,6 +502,7 @@ class FinalistDetector:
             decode_ms=decode_ms,
             detector_ms=detector_ms,
             frame_processing_ms=decode_ms + detector_ms,
+            class_names=self.class_names,
         )
 
     def detect(self, frame: PointCloudFrame) -> DetectionFrame:
@@ -610,6 +633,7 @@ class FinalistDetector:
             boxes, scores, labels = _validated_prediction_arrays(
                 result,
                 score_threshold=self._score_threshold,
+                class_names=self.class_names,
             )
 
             return completed_result(

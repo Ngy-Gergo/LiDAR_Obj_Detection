@@ -38,6 +38,13 @@ _BOX_EDGES = (
 _MARKER_COLORS = {
     "voxel0075": (0.0, 0.78, 1.0),
     "pillar02": (1.0, 0.48, 0.0),
+    "pillar02_multiclass": (1.0, 0.48, 0.0),
+}
+
+_MULTICLASS_MARKER_COLORS = {
+    "Car": (1.0, 0.48, 0.0),
+    "Pedestrian": (0.0, 0.78, 1.0),
+    "Cyclist": (0.76, 0.31, 0.96),
 }
 
 
@@ -67,6 +74,14 @@ def _copied_header(types: RosMessageTypes, stamp: object, frame_id: str) -> obje
     return header
 
 
+def _class_name(class_names: tuple[str, ...], label: int) -> str:
+    """Resolve a prediction label through checkpoint-recorded metadata."""
+
+    if label < 0 or label >= len(class_names):
+        raise ValueError("prediction label is outside recorded class_names")
+    return class_names[label]
+
+
 class RosMessageBuilder:
     """Build standard detection, marker, diagnostic, and cloud messages."""
 
@@ -89,6 +104,21 @@ class RosMessageBuilder:
     def marker_color(self) -> tuple[float, float, float]:
         return _MARKER_COLORS[self._model_alias]
 
+    def _marker_color_for_label(
+        self,
+        class_names: tuple[str, ...],
+        label: int,
+    ) -> tuple[float, float, float]:
+        class_name = _class_name(class_names, label)
+        if self._model_alias != "pillar02_multiclass":
+            return self.marker_color
+        try:
+            return _MULTICLASS_MARKER_COLORS[class_name]
+        except KeyError as error:
+            raise ValueError(
+                "pillar02_multiclass marker class is not registered"
+            ) from error
+
     def _require_result_identity(self, result: DetectionFrame) -> None:
         if not isinstance(result, DetectionFrame):
             raise TypeError("result must be a DetectionFrame")
@@ -108,7 +138,9 @@ class RosMessageBuilder:
         message = self._types.Detection3DArray()
         message.header = _copied_header(self._types, stamp, self._base_frame)
         message.detections = []
-        for index, (box, score) in enumerate(zip(centered, result.scores)):
+        for index, (box, score, label_index) in enumerate(
+            zip(centered, result.scores, result.labels)
+        ):
             detection = self._types.Detection3D()
             detection.header = _copied_header(
                 self._types,
@@ -126,7 +158,10 @@ class RosMessageBuilder:
             detection.bbox.size.z = float(box[5])
 
             hypothesis = self._types.ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = "Car"
+            hypothesis.hypothesis.class_id = _class_name(
+                result.class_names,
+                int(label_index),
+            )
             hypothesis.hypothesis.score = float(score)
             hypothesis.pose.pose.position.x = float(box[0])
             hypothesis.pose.pose.position.y = float(box[1])
@@ -151,12 +186,15 @@ class RosMessageBuilder:
         boxes = boxes_to_base_frame(result.boxes, calibration)
         centered = bottom_to_center(boxes)
         corners = box_corners_3d(boxes)
-        red, green, blue = self.marker_color
         markers: list[object] = []
 
-        for index, (box_corners, box, score) in enumerate(
-            zip(corners, centered, result.scores)
+        for index, (box_corners, box, score, label_index) in enumerate(
+            zip(corners, centered, result.scores, result.labels)
         ):
+            red, green, blue = self._marker_color_for_label(
+                result.class_names,
+                int(label_index),
+            )
             wire = self._types.Marker()
             wire.header = _copied_header(self._types, stamp, self._base_frame)
             wire.ns = f"{self._model_alias}/boxes"
@@ -193,7 +231,11 @@ class RosMessageBuilder:
             label.color.g = green
             label.color.b = blue
             label.color.a = 1.0
-            label.text = f"{self._model_alias} Car {float(score):.2f}"
+            label.text = (
+                f"{self._model_alias} "
+                f"{_class_name(result.class_names, int(label_index))} "
+                f"{float(score):.2f}"
+            )
             markers.append(label)
 
         for stale_id in range(result.detection_count, previous_detection_count):
@@ -247,7 +289,10 @@ class RosMessageBuilder:
             detection.id = str(track.track_id)
             self._set_detection_box(detection, box)
             hypothesis = self._types.ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = "Car"
+            hypothesis.hypothesis.class_id = _class_name(
+                frame.class_names,
+                track.label,
+            )
             hypothesis.hypothesis.score = float(track.score)
             hypothesis.pose.pose.position.x = float(box[0])
             hypothesis.pose.pose.position.y = float(box[1])
@@ -275,10 +320,13 @@ class RosMessageBuilder:
             for track_id in previous_track_ids
         ):
             raise ValueError("previous_track_ids must contain positive integers")
-        red, green, blue = self.marker_color
         markers: list[object] = []
         visible_ids: set[int] = set()
         for track in frame.visible_tracks:
+            red, green, blue = self._marker_color_for_label(
+                frame.class_names,
+                track.label,
+            )
             visible_ids.add(track.track_id)
             box_values = np.asarray((track.box,), dtype=np.float64)
             centered = bottom_to_center(box_values)[0]
@@ -320,7 +368,8 @@ class RosMessageBuilder:
             label.color.b = blue
             label.color.a = 0.55 if track.coasting else 1.0
             label.text = (
-                f"Car #{track.track_id} {track.score:.2f} "
+                f"{_class_name(frame.class_names, track.label)} "
+                f"#{track.track_id} {track.score:.2f} "
                 f"{speed:.1f} m/s {state}"
             )
             markers.append(label)
