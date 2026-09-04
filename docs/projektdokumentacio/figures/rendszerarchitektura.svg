@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Title: rendszerarchitektura Pages: 1 -->
+<svg width="1993pt" height="184pt"
+ viewBox="0.00 0.00 1993.00 184.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(18 166)">
+<title>rendszerarchitektura</title>
+<polygon fill="white" stroke="transparent" points="-18,18 -18,-166 1975,-166 1975,18 -18,18"/>
+<!-- kitti -->
+<g id="node1" class="node">
+<title>kitti</title>
+<path fill="#e8f1fa" stroke="#355070" d="M122,-124C122,-124 37,-124 37,-124 31,-124 25,-118 25,-112 25,-112 25,-100 25,-100 25,-94 31,-88 37,-88 37,-88 122,-88 122,-88 128,-88 134,-94 134,-100 134,-100 134,-112 134,-112 134,-118 128,-124 122,-124"/>
+<text text-anchor="middle" x="79.5" y="-109.2" font-family="DejaVu Sans" font-size="11.00">KITTI</text>
+<text text-anchor="middle" x="79.5" y="-97.2" font-family="DejaVu Sans" font-size="11.00">train / validation</text>
+</g>
+<!-- train -->
+<g id="node3" class="node">
+<title>train</title>
+<path fill="#ddebf7" stroke="#355070" d="M317,-93C317,-93 220,-93 220,-93 214,-93 208,-87 208,-81 208,-81 208,-69 208,-69 208,-63 214,-57 220,-57 220,-57 317,-57 317,-57 323,-57 329,-63 329,-69 329,-69 329,-81 329,-81 329,-87 323,-93 317,-93"/>
+<text text-anchor="middle" x="268.5" y="-78.2" font-family="DejaVu Sans" font-size="11.00">Tanítás</text>
+<text text-anchor="middle" x="268.5" y="-66.2" font-family="DejaVu Sans" font-size="11.00">run&#45;owned artifact</text>
+</g>
+<!-- kitti&#45;&gt;train -->
+<g id="edge1" class="edge">
+<title>kitti&#45;&gt;train</title>
+<path fill="none" stroke="#355070" d="M134.09,-97.12C154.93,-93.66 179.03,-89.67 200.96,-86.03"/>
+<polygon fill="#355070" stroke="#355070" points="201.49,-88.43 208,-84.86 200.69,-83.59 201.49,-88.43"/>
+</g>
+<!-- configs -->
+<g id="node2" class="node">
+<title>configs</title>
+<path fill="#e8f1fa" stroke="#355070" d="M147,-63C147,-63 12,-63 12,-63 6,-63 0,-57 0,-51 0,-51 0,-39 0,-39 0,-33 6,-27 12,-27 12,-27 147,-27 147,-27 153,-27 159,-33 159,-39 159,-39 159,-51 159,-51 159,-57 153,-63 147,-63"/>
+<text text-anchor="middle" x="79.5" y="-48.2" font-family="DejaVu Sans" font-size="11.00">MMDetection3D</text>
+<text text-anchor="middle" x="79.5" y="-36.2" font-family="DejaVu Sans" font-size="11.00">CenterPoint&#45;konfigurációk</text>
+</g>
+<!-- configs&#45;&gt;train -->
+<g id="edge2" class="edge">
+<title>configs&#45;&gt;train</title>
+<path fill="none" stroke="#355070" d="M159.26,-57.64C173.12,-59.86 187.42,-62.15 200.9,-64.32"/>
+<polygon fill="#355070" stroke="#355070" points="200.57,-66.74 207.87,-65.43 201.34,-61.91 200.57,-66.74"/>
+</g>
+<!-- manifest -->
+<g id="node4" class="node">
+<title>manifest</title>
+<path fill="#ddebf7" stroke="#355070" d="M582,-124C582,-124 390,-124 390,-124 384,-124 378,-118 378,-112 378,-112 378,-100 378,-100 378,-94 384,-88 390,-88 390,-88 582,-88 582,-88 588,-88 594,-94 594,-100 594,-100 594,-112 594,-112 594,-118 588,-124 582,-124"/>
+<text text-anchor="middle" x="486" y="-109.2" font-family="DejaVu Sans" font-size="11.00">manifest.json</text>
+<text text-anchor="middle" x="486" y="-97.2" font-family="DejaVu Sans" font-size="11.00">config + dataset + checkpoint hash</text>
+</g>
+<!-- train&#45;&gt;manifest -->
+<g id="edge3" class="edge">
+<title>train&#45;&gt;manifest</title>
+<path fill="none" stroke="#355070" d="M329.24,-83.59C342.2,-85.46 356.31,-87.49 370.58,-89.54"/>
+<polygon fill="#355070" stroke="#355070" points="370.32,-91.98 377.6,-90.55 371.02,-87.13 370.32,-91.98"/>
+</g>
+<!-- results -->
+<g id="node5" class="node">
+<title>results</title>
+<path fill="#ddebf7" stroke="#355070" d="M575.5,-63C575.5,-63 396.5,-63 396.5,-63 390.5,-63 384.5,-57 384.5,-51 384.5,-51 384.5,-39 384.5,-39 384.5,-33 390.5,-27 396.5,-27 396.5,-27 575.5,-27 575.5,-27 581.5,-27 587.5,-33 587.5,-39 587.5,-39 587.5,-51 587.5,-51 587.5,-57 581.5,-63 575.5,-63"/>
+<text text-anchor="middle" x="486" y="-48.2" font-family="DejaVu Sans" font-size="11.00">immutable evaluation/benchmark</text>
+<text text-anchor="middle" x="486" y="-36.2" font-family="DejaVu Sans" font-size="11.00">result.json</text>
+</g>
+<!-- train&#45;&gt;results -->
+<g id="edge4" class="edge">
+<title>train&#45;&gt;results</title>
+<path fill="none" stroke="#355070" d="M329.24,-66.68C344.17,-64.6 360.65,-62.31 377.13,-60.02"/>
+<polygon fill="#355070" stroke="#355070" points="377.6,-62.43 384.19,-59.03 376.92,-57.57 377.6,-62.43"/>
+</g>
+<!-- registry -->
+<g id="node6" class="node">
+<title>registry</title>
+<path fill="#fff2cc" stroke="#355070" d="M793,-97C793,-97 667,-97 667,-97 661,-97 655,-91 655,-85 655,-85 655,-73 655,-73 655,-67 661,-61 667,-61 667,-61 793,-61 793,-61 799,-61 805,-67 805,-73 805,-73 805,-85 805,-85 805,-91 799,-97 793,-97"/>
+<text text-anchor="middle" x="730" y="-82.2" font-family="DejaVu Sans" font-size="11.00">Zárt finalistaregistry</text>
+<text text-anchor="middle" x="730" y="-70.2" font-family="DejaVu Sans" font-size="11.00">run&#45; és checkpointkötés</text>
+</g>
+<!-- manifest&#45;&gt;registry -->
+<g id="edge5" class="edge">
+<title>manifest&#45;&gt;registry</title>
+<path fill="none" stroke="#355070" d="M594.2,-94.04C612.12,-92.04 630.45,-89.99 647.59,-88.08"/>
+<polygon fill="#355070" stroke="#355070" points="648.17,-90.48 654.86,-87.27 647.63,-85.61 648.17,-90.48"/>
+</g>
+<!-- results&#45;&gt;registry -->
+<g id="edge6" class="edge">
+<title>results&#45;&gt;registry</title>
+<path fill="none" stroke="#355070" d="M587.53,-59.12C607.65,-61.95 628.55,-64.89 647.92,-67.61"/>
+<polygon fill="#355070" stroke="#355070" points="647.71,-70.05 654.98,-68.6 648.39,-65.2 647.71,-70.05"/>
+</g>
+<!-- node_ros -->
+<g id="node8" class="node">
+<title>node_ros</title>
+<path fill="#e2f0d9" stroke="#355070" d="M1076,-96C1076,-96 878,-96 878,-96 872,-96 866,-90 866,-84 866,-84 866,-72 866,-72 866,-66 872,-60 878,-60 878,-60 1076,-60 1076,-60 1082,-60 1088,-66 1088,-72 1088,-72 1088,-84 1088,-84 1088,-90 1082,-96 1076,-96"/>
+<text text-anchor="middle" x="977" y="-81.2" font-family="DejaVu Sans" font-size="11.00">ROS2 detektorcsomópont</text>
+<text text-anchor="middle" x="977" y="-69.2" font-family="DejaVu Sans" font-size="11.00">Mmdet3dDetector → DetectionFrame</text>
+</g>
+<!-- registry&#45;&gt;node_ros -->
+<g id="edge7" class="edge">
+<title>registry&#45;&gt;node_ros</title>
+<path fill="none" stroke="#355070" d="M805.17,-78.7C822.08,-78.63 840.46,-78.55 858.67,-78.48"/>
+<polygon fill="#355070" stroke="#355070" points="858.93,-80.93 865.92,-78.45 858.91,-76.03 858.93,-80.93"/>
+</g>
+<!-- bag -->
+<g id="node7" class="node">
+<title>bag</title>
+<path fill="#e2f0d9" stroke="#355070" d="M805,-36C805,-36 655,-36 655,-36 649,-36 643,-30 643,-24 643,-24 643,-12 643,-12 643,-6 649,0 655,0 655,0 805,0 805,0 811,0 817,-6 817,-12 817,-12 817,-24 817,-24 817,-30 811,-36 805,-36"/>
+<text text-anchor="middle" x="730" y="-21.2" font-family="DejaVu Sans" font-size="11.00">Lexus LiDAR + TF + kamera</text>
+<text text-anchor="middle" x="730" y="-9.2" font-family="DejaVu Sans" font-size="11.00">ROS2 bag / MCAP</text>
+</g>
+<!-- bag&#45;&gt;node_ros -->
+<g id="edge8" class="edge">
+<title>bag&#45;&gt;node_ros</title>
+<path fill="none" stroke="#355070" d="M804.51,-36C833.09,-43 865.92,-51.04 895.16,-58.2"/>
+<polygon fill="#355070" stroke="#355070" points="894.74,-60.62 902.12,-59.91 895.9,-55.86 894.74,-60.62"/>
+</g>
+<!-- foxglove -->
+<g id="node11" class="node">
+<title>foxglove</title>
+<path fill="#fce4d6" stroke="#355070" d="M1945,-50C1945,-50 1794,-50 1794,-50 1788,-50 1782,-44 1782,-38 1782,-38 1782,-26 1782,-26 1782,-20 1788,-14 1794,-14 1794,-14 1945,-14 1945,-14 1951,-14 1957,-20 1957,-26 1957,-26 1957,-38 1957,-38 1957,-44 1951,-50 1945,-50"/>
+<text text-anchor="middle" x="1869.5" y="-35.2" font-family="DejaVu Sans" font-size="11.00">Foxglove Bridge</text>
+<text text-anchor="middle" x="1869.5" y="-23.2" font-family="DejaVu Sans" font-size="11.00">élő vagy MCAP&#45;megjelenítés</text>
+</g>
+<!-- bag&#45;&gt;foxglove -->
+<g id="edge13" class="edge">
+<title>bag&#45;&gt;foxglove</title>
+<path fill="none" stroke="#355070" d="M817.17,-17.48C864.13,-17.23 923.26,-17 976,-17 976,-17 976,-17 1632.5,-17 1679.46,-17 1731.57,-19.99 1774.85,-23.31"/>
+<polygon fill="#355070" stroke="#355070" points="1774.83,-25.76 1782,-23.86 1775.21,-20.88 1774.83,-25.76"/>
+<text text-anchor="middle" x="1301.5" y="-19.8" font-family="DejaVu Sans" font-size="9.00">pontfelhő, TF, kamera</text>
+</g>
+<!-- tracker -->
+<g id="node9" class="node">
+<title>tracker</title>
+<path fill="#e2f0d9" stroke="#355070" d="M1383,-148C1383,-148 1220,-148 1220,-148 1214,-148 1208,-142 1208,-136 1208,-136 1208,-124 1208,-124 1208,-118 1214,-112 1220,-112 1220,-112 1383,-112 1383,-112 1389,-112 1395,-118 1395,-124 1395,-124 1395,-136 1395,-136 1395,-142 1389,-148 1383,-148"/>
+<text text-anchor="middle" x="1301.5" y="-133.2" font-family="DejaVu Sans" font-size="11.00">OnlineBoxTracker</text>
+<text text-anchor="middle" x="1301.5" y="-121.2" font-family="DejaVu Sans" font-size="11.00">osztályspecifikus kapu + reset</text>
+</g>
+<!-- node_ros&#45;&gt;tracker -->
+<g id="edge9" class="edge">
+<title>node_ros&#45;&gt;tracker</title>
+<path fill="none" stroke="#355070" d="M1088.08,-95.75C1124.61,-101.64 1165.04,-108.16 1200.74,-113.91"/>
+<polygon fill="#355070" stroke="#355070" points="1200.51,-116.36 1207.81,-115.05 1201.29,-111.52 1200.51,-116.36"/>
+<text text-anchor="middle" x="1148" y="-112.8" font-family="DejaVu Sans" font-size="9.00">DetectionFrame</text>
+</g>
+<!-- topics -->
+<g id="node10" class="node">
+<title>topics</title>
+<path fill="#e2f0d9" stroke="#355070" d="M1721,-95C1721,-95 1542,-95 1542,-95 1536,-95 1530,-89 1530,-83 1530,-83 1530,-71 1530,-71 1530,-65 1536,-59 1542,-59 1542,-59 1721,-59 1721,-59 1727,-59 1733,-65 1733,-71 1733,-71 1733,-83 1733,-83 1733,-89 1727,-95 1721,-95"/>
+<text text-anchor="middle" x="1631.5" y="-80.2" font-family="DejaVu Sans" font-size="11.00">raw/tracked detekciók, markerek,</text>
+<text text-anchor="middle" x="1631.5" y="-68.2" font-family="DejaVu Sans" font-size="11.00">diagnosztika, model_points</text>
+</g>
+<!-- node_ros&#45;&gt;topics -->
+<g id="edge10" class="edge">
+<title>node_ros&#45;&gt;topics</title>
+<path fill="none" stroke="#355070" d="M1088.32,-77.83C1209.46,-77.65 1402.7,-77.35 1522.79,-77.17"/>
+<polygon fill="#355070" stroke="#355070" points="1522.88,-79.62 1529.88,-77.15 1522.88,-74.72 1522.88,-79.62"/>
+<text text-anchor="middle" x="1301.5" y="-79.8" font-family="DejaVu Sans" font-size="9.00">nyers eredmény</text>
+</g>
+<!-- tracker&#45;&gt;topics -->
+<g id="edge11" class="edge">
+<title>tracker&#45;&gt;topics</title>
+<path fill="none" stroke="#355070" d="M1395.18,-115.02C1434.84,-108.62 1481.42,-101.09 1522.63,-94.43"/>
+<polygon fill="#355070" stroke="#355070" points="1523.2,-96.82 1529.72,-93.28 1522.42,-91.98 1523.2,-96.82"/>
+<text text-anchor="middle" x="1462.5" y="-111.8" font-family="DejaVu Sans" font-size="9.00">követett eredmény</text>
+</g>
+<!-- topics&#45;&gt;foxglove -->
+<g id="edge12" class="edge">
+<title>topics&#45;&gt;foxglove</title>
+<path fill="none" stroke="#355070" d="M1727.13,-58.96C1742.81,-55.97 1759.06,-52.87 1774.72,-49.88"/>
+<polygon fill="#355070" stroke="#355070" points="1775.45,-52.24 1781.87,-48.52 1774.54,-47.42 1775.45,-52.24"/>
+</g>
+</g>
+</svg>

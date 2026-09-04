@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Title: evidence_pipeline Pages: 1 -->
+<svg width="622pt" height="432pt"
+ viewBox="0.00 0.00 622.00 432.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(18 414)">
+<title>evidence_pipeline</title>
+<polygon fill="white" stroke="transparent" points="-18,18 -18,-414 604,-414 604,18 -18,18"/>
+<!-- config -->
+<g id="node1" class="node">
+<title>config</title>
+<path fill="#e8f1fa" stroke="#355070" d="M194.5,-396C194.5,-396 95.5,-396 95.5,-396 89.5,-396 83.5,-390 83.5,-384 83.5,-384 83.5,-372 83.5,-372 83.5,-366 89.5,-360 95.5,-360 95.5,-360 194.5,-360 194.5,-360 200.5,-360 206.5,-366 206.5,-372 206.5,-372 206.5,-384 206.5,-384 206.5,-390 200.5,-396 194.5,-396"/>
+<text text-anchor="middle" x="145" y="-381.2" font-family="DejaVu Sans" font-size="11.00">Run&#45;local config.py</text>
+<text text-anchor="middle" x="145" y="-369.2" font-family="DejaVu Sans" font-size="11.00">SHA&#45;256</text>
+</g>
+<!-- manifest -->
+<g id="node4" class="node">
+<title>manifest</title>
+<path fill="#ddebf7" stroke="#355070" d="M387.5,-324C387.5,-324 256.5,-324 256.5,-324 250.5,-324 244.5,-318 244.5,-312 244.5,-312 244.5,-300 244.5,-300 244.5,-294 250.5,-288 256.5,-288 256.5,-288 387.5,-288 387.5,-288 393.5,-288 399.5,-294 399.5,-300 399.5,-300 399.5,-312 399.5,-312 399.5,-318 393.5,-324 387.5,-324"/>
+<text text-anchor="middle" x="322" y="-303.2" font-family="DejaVu Sans" font-size="11.00">run&#45;owned manifest.json</text>
+</g>
+<!-- config&#45;&gt;manifest -->
+<g id="edge1" class="edge">
+<title>config&#45;&gt;manifest</title>
+<path fill="none" stroke="#355070" d="M188.3,-359.88C213.68,-349.84 245.84,-337.12 272.26,-326.67"/>
+<polygon fill="#355070" stroke="#355070" points="273.23,-328.92 278.84,-324.07 271.43,-324.36 273.23,-328.92"/>
+</g>
+<!-- dataset -->
+<g id="node2" class="node">
+<title>dataset</title>
+<path fill="#e8f1fa" stroke="#355070" d="M405.5,-396C405.5,-396 238.5,-396 238.5,-396 232.5,-396 226.5,-390 226.5,-384 226.5,-384 226.5,-372 226.5,-372 226.5,-366 232.5,-360 238.5,-360 238.5,-360 405.5,-360 405.5,-360 411.5,-360 417.5,-366 417.5,-372 417.5,-372 417.5,-384 417.5,-384 417.5,-390 411.5,-396 405.5,-396"/>
+<text text-anchor="middle" x="322" y="-381.2" font-family="DejaVu Sans" font-size="11.00">Dataset&#45; és annotation&#45;identity</text>
+<text text-anchor="middle" x="322" y="-369.2" font-family="DejaVu Sans" font-size="11.00">SHA&#45;256</text>
+</g>
+<!-- dataset&#45;&gt;manifest -->
+<g id="edge2" class="edge">
+<title>dataset&#45;&gt;manifest</title>
+<path fill="none" stroke="#355070" d="M322,-359.7C322,-351.14 322,-340.66 322,-331.3"/>
+<polygon fill="#355070" stroke="#355070" points="324.45,-331.1 322,-324.1 319.55,-331.1 324.45,-331.1"/>
+</g>
+<!-- checkpoint -->
+<g id="node3" class="node">
+<title>checkpoint</title>
+<path fill="#e8f1fa" stroke="#355070" d="M574,-396C574,-396 450,-396 450,-396 444,-396 438,-390 438,-384 438,-384 438,-372 438,-372 438,-366 444,-360 450,-360 450,-360 574,-360 574,-360 580,-360 586,-366 586,-372 586,-372 586,-384 586,-384 586,-390 580,-396 574,-396"/>
+<text text-anchor="middle" x="512" y="-381.2" font-family="DejaVu Sans" font-size="11.00">Kiválasztott checkpoint</text>
+<text text-anchor="middle" x="512" y="-369.2" font-family="DejaVu Sans" font-size="11.00">méret + SHA&#45;256</text>
+</g>
+<!-- checkpoint&#45;&gt;manifest -->
+<g id="edge3" class="edge">
+<title>checkpoint&#45;&gt;manifest</title>
+<path fill="none" stroke="#355070" d="M465.52,-359.88C438.16,-349.8 403.46,-337.01 375.04,-326.54"/>
+<polygon fill="#355070" stroke="#355070" points="375.74,-324.19 368.33,-324.07 374.05,-328.79 375.74,-324.19"/>
+</g>
+<!-- evaluation -->
+<g id="node5" class="node">
+<title>evaluation</title>
+<path fill="#ddebf7" stroke="#355070" d="M188,-252C188,-252 12,-252 12,-252 6,-252 0,-246 0,-240 0,-240 0,-228 0,-228 0,-222 6,-216 12,-216 12,-216 188,-216 188,-216 194,-216 200,-222 200,-228 200,-228 200,-240 200,-240 200,-246 194,-252 188,-252"/>
+<text text-anchor="middle" x="100" y="-231.2" font-family="DejaVu Sans" font-size="11.00">Immutable evaluation/result.json</text>
+</g>
+<!-- manifest&#45;&gt;evaluation -->
+<g id="edge4" class="edge">
+<title>manifest&#45;&gt;evaluation</title>
+<path fill="none" stroke="#355070" d="M267.98,-287.97C235.74,-277.8 194.72,-264.87 161.28,-254.32"/>
+<polygon fill="#355070" stroke="#355070" points="161.68,-251.88 154.27,-252.11 160.2,-256.55 161.68,-251.88"/>
+</g>
+<!-- benchmark -->
+<g id="node6" class="node">
+<title>benchmark</title>
+<path fill="#ddebf7" stroke="#355070" d="M411.5,-252C411.5,-252 232.5,-252 232.5,-252 226.5,-252 220.5,-246 220.5,-240 220.5,-240 220.5,-228 220.5,-228 220.5,-222 226.5,-216 232.5,-216 232.5,-216 411.5,-216 411.5,-216 417.5,-216 423.5,-222 423.5,-228 423.5,-228 423.5,-240 423.5,-240 423.5,-246 417.5,-252 411.5,-252"/>
+<text text-anchor="middle" x="322" y="-231.2" font-family="DejaVu Sans" font-size="11.00">Immutable benchmark/result.json</text>
+</g>
+<!-- manifest&#45;&gt;benchmark -->
+<g id="edge5" class="edge">
+<title>manifest&#45;&gt;benchmark</title>
+<path fill="none" stroke="#355070" d="M322,-287.7C322,-279.14 322,-268.66 322,-259.3"/>
+<polygon fill="#355070" stroke="#355070" points="324.45,-259.1 322,-252.1 319.55,-259.1 324.45,-259.1"/>
+</g>
+<!-- documentation -->
+<g id="node9" class="node">
+<title>documentation</title>
+<path fill="#fce4d6" stroke="#355070" d="M473,-36C473,-36 353,-36 353,-36 347,-36 341,-30 341,-24 341,-24 341,-12 341,-12 341,-6 347,0 353,0 353,0 473,0 473,0 479,0 485,-6 485,-12 485,-12 485,-24 485,-24 485,-30 479,-36 473,-36"/>
+<text text-anchor="middle" x="413" y="-21.2" font-family="DejaVu Sans" font-size="11.00">Műszaki dokumentáció</text>
+<text text-anchor="middle" x="413" y="-9.2" font-family="DejaVu Sans" font-size="11.00">evidence_index.md</text>
+</g>
+<!-- manifest&#45;&gt;documentation -->
+<g id="edge9" class="edge">
+<title>manifest&#45;&gt;documentation</title>
+<path fill="none" stroke="#355070" d="M387.68,-287.95C405.42,-280.01 422.58,-268.53 433,-252 474.72,-185.85 442.34,-87.34 423.74,-42.62"/>
+<polygon fill="#355070" stroke="#355070" points="425.99,-41.65 421,-36.16 421.49,-43.56 425.99,-41.65"/>
+</g>
+<!-- comparison -->
+<g id="node7" class="node">
+<title>comparison</title>
+<path fill="#fff2cc" stroke="#355070" d="M391,-180C391,-180 243,-180 243,-180 237,-180 231,-174 231,-168 231,-168 231,-156 231,-156 231,-150 237,-144 243,-144 243,-144 391,-144 391,-144 397,-144 403,-150 403,-156 403,-156 403,-168 403,-168 403,-174 397,-180 391,-180"/>
+<text text-anchor="middle" x="317" y="-165.2" font-family="DejaVu Sans" font-size="11.00">Feloldott comparison JSON</text>
+<text text-anchor="middle" x="317" y="-153.2" font-family="DejaVu Sans" font-size="11.00">kompatibilitás&#45;ellenőrzéssel</text>
+</g>
+<!-- evaluation&#45;&gt;comparison -->
+<g id="edge6" class="edge">
+<title>evaluation&#45;&gt;comparison</title>
+<path fill="none" stroke="#355070" d="M152.81,-215.97C184.31,-205.8 224.41,-192.87 257.1,-182.32"/>
+<polygon fill="#355070" stroke="#355070" points="258.05,-184.59 263.96,-180.11 256.54,-179.93 258.05,-184.59"/>
+</g>
+<!-- benchmark&#45;&gt;comparison -->
+<g id="edge7" class="edge">
+<title>benchmark&#45;&gt;comparison</title>
+<path fill="none" stroke="#355070" d="M320.76,-215.7C320.15,-207.14 319.4,-196.66 318.74,-187.3"/>
+<polygon fill="#355070" stroke="#355070" points="321.16,-186.91 318.22,-180.1 316.28,-187.26 321.16,-186.91"/>
+</g>
+<!-- figures -->
+<g id="node8" class="node">
+<title>figures</title>
+<path fill="#e2f0d9" stroke="#355070" d="M369.5,-108C369.5,-108 254.5,-108 254.5,-108 248.5,-108 242.5,-102 242.5,-96 242.5,-96 242.5,-84 242.5,-84 242.5,-78 248.5,-72 254.5,-72 254.5,-72 369.5,-72 369.5,-72 375.5,-72 381.5,-78 381.5,-84 381.5,-84 381.5,-96 381.5,-96 381.5,-102 375.5,-108 369.5,-108"/>
+<text text-anchor="middle" x="312" y="-93.2" font-family="DejaVu Sans" font-size="11.00">Reprodukálható ábrák</text>
+<text text-anchor="middle" x="312" y="-81.2" font-family="DejaVu Sans" font-size="11.00">PNG + SVG</text>
+</g>
+<!-- comparison&#45;&gt;figures -->
+<g id="edge8" class="edge">
+<title>comparison&#45;&gt;figures</title>
+<path fill="none" stroke="#355070" d="M315.76,-143.7C315.15,-135.14 314.4,-124.66 313.74,-115.3"/>
+<polygon fill="#355070" stroke="#355070" points="316.16,-114.91 313.22,-108.1 311.28,-115.26 316.16,-114.91"/>
+</g>
+<!-- comparison&#45;&gt;documentation -->
+<g id="edge10" class="edge">
+<title>comparison&#45;&gt;documentation</title>
+<path fill="none" stroke="#355070" d="M350.71,-143.93C365.11,-135.05 380.89,-122.91 391,-108 404.09,-88.69 409.4,-62.33 411.55,-43.31"/>
+<polygon fill="#355070" stroke="#355070" points="414.01,-43.36 412.25,-36.16 409.13,-42.89 414.01,-43.36"/>
+</g>
+<!-- figures&#45;&gt;documentation -->
+<g id="edge11" class="edge">
+<title>figures&#45;&gt;documentation</title>
+<path fill="none" stroke="#355070" d="M336.71,-71.88C350.4,-62.38 367.56,-50.5 382.13,-40.4"/>
+<polygon fill="#355070" stroke="#355070" points="383.84,-42.19 388.2,-36.19 381.05,-38.16 383.84,-42.19"/>
+</g>
+</g>
+</svg>

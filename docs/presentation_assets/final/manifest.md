@@ -11,20 +11,11 @@ felhasználó által olvasott címei, tengelyfeliratai, jelmagyarázatai, mátri
 táblázatfejlécei, annotációi és megjegyzései viszont tudatosan angol nyelvűek,
 hogy a prezentáció nemzetközi közönség számára is közvetlenül olvasható legyen.
 
-## Teljes reprodukció
+## Forrás és megőrzési állapot
 
-A repository gyökeréből futtatandó parancs:
-
-```bash
-/home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
-  research/tools/render_presentation_assets_final.py \
-  --runs-root /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs \
-  --output-dir docs/presentation_assets/final/figures
-```
-
-A renderelő az ábrák létrehozása előtt újra ellenőrzi a tartós multiclass
-checkpoint tényleges méretét és SHA-256 értékét, valamint az evaluation- és
-benchmark-result kötését.
+Az ábrák a lent megnevezett, változatlan immutable evaluation- és benchmark-
+forrásokhoz kötött végleges SVG/PNG assetek. A `summary.csv` állományok nem
+adatforrások.
 
 ## Megtartott ábrák
 
@@ -39,16 +30,6 @@ benchmark-result kötését.
   `research/reports/20260827-six-model-20epoch/fresh-end-to-end-p95.json`.
 - Bemutatott metrika: Car 3D AP40 strict, közepes nehézség; végponttól
   végpontig mért p95 késleltetés.
-- Generálási parancs:
-
-  ```bash
-  /home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
-    research/tools/render_presentation_assets_final.py \
-    --runs-root /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs \
-    --output-dir docs/presentation_assets/final/figures \
-    --figure hatmodell_pareto_3d_ap40_p95
-  ```
-
 - Összehasonlíthatósági korlát: csak a hat azonos kampányú, kizárólag Car
   osztályt kezelő, 20 epochos futás rangsorolható együtt; egyetlen seed és KITTI validation
   eredmény.
@@ -64,16 +45,6 @@ benchmark-result kötését.
   `research/reports/20260827-six-model-20epoch/fresh-prediction-p95.json` és
   `research/reports/20260827-six-model-20epoch/fresh-end-to-end-p95.json`.
 - Bemutatott metrika: prediction p95 és end-to-end p95, milliszekundumban.
-- Generálási parancs:
-
-  ```bash
-  /home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
-    research/tools/render_presentation_assets_final.py \
-    --runs-root /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs \
-    --output-dir docs/presentation_assets/final/figures \
-    --figure hatmodell_p95_meresi_scope
-  ```
-
 - Összehasonlíthatósági korlát: a mérési tartományok két külön, feloldott riportból
   származnak, de modellről modellre azonos checkpointkötésűek; a p95 értékek
   különbsége nem eseményszintű időfelbontás.
@@ -89,16 +60,6 @@ benchmark-result kötését.
   `research/reports/20260902-finalists-duration30/paired-end-to-end-p95.json`.
 - Bemutatott metrika: Car 3D és BEV AP40 strict könnyű/közepes/nehéz;
   prediction és end-to-end p95.
-- Generálási parancs:
-
-  ```bash
-  /home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
-    research/tools/render_presentation_assets_final.py \
-    --runs-root /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs \
-    --output-dir docs/presentation_assets/final/figures \
-    --figure finalistak_eredmenymatrix
-  ```
-
 - Összehasonlíthatósági korlát: csak a Pillar02 és Voxel0075 architektúrán
   belüli párosított 20/30 epochos következtetés érvényes; az eredmények
   egyetlen seeddel készült KITTI validation mérések.
@@ -116,16 +77,6 @@ benchmark-result kötését.
   `research/runs/20260902T125737Z-pillar02-multiclass-faa487143efbe3dba808d9ac/benchmark/20260902T195651982215Z-benchmark-0001486e79f9c7dd48f28e10/result.json`.
 - Bemutatott metrika: Car, Pedestrian és Cyclist 3D/BEV AP40 strict,
   könnyű/közepes/nehéz; end-to-end p95 kiegészítő evidence-ként.
-- Generálási parancs:
-
-  ```bash
-  /home/ws-rtx/anaconda3/envs/lidar_centerpoint_g/bin/python \
-    research/tools/render_presentation_assets_final.py \
-    --runs-root /home/ws-rtx/Documents/Projects/lidar-centerpoint/research/runs \
-    --output-dir docs/presentation_assets/final/figures \
-    --figure pillar02_tobbosztalyos_ap40_matrix
-  ```
-
 - Összehasonlíthatósági korlát: ez külön Pillar02 többosztályos,
   60 epochos kísérlet, amelynek kijelölt checkpointja az 55. epochból származik.
   Nem rangsorolható közvetlenül a hat 20 epochos, kizárólag Car osztályt
