@@ -80,7 +80,7 @@ MODEL_COLORS = {
 }
 CLASSES = ("Car", "Pedestrian", "Cyclist")
 DIFFICULTIES = ("easy", "moderate", "hard")
-DIFFICULTY_LABELS = ("könnyű", "közepes", "nehéz")
+DIFFICULTY_LABELS = ("Easy", "Moderate", "Hard")
 
 FIGURE_PARETO = "hatmodell_pareto_3d_ap40_p95"
 FIGURE_LATENCY = "hatmodell_p95_meresi_scope"
@@ -247,7 +247,7 @@ def _render_pareto(context: dict[str, Any], output_dir: Path) -> None:
         color="#2F5597",
         linewidth=2.2,
         linestyle="--",
-        label="Pareto-határ",
+        label="Pareto frontier",
         zorder=2,
     )
     offsets = {
@@ -277,12 +277,12 @@ def _render_pareto(context: dict[str, Any], output_dir: Path) -> None:
             textcoords="offset points",
             fontsize=12,
         )
-    axis.axvline(50, color="#E15759", linewidth=1.8, linestyle=":", label="20 Hz követelmény (50 ms)")
+    axis.axvline(50, color="#E15759", linewidth=1.8, linestyle=":", label="Real-time target (50 ms)")
     axis.set_xlim(12.5, 51.5)
     axis.set_ylim(53.6, 66.75)
-    axis.set_xlabel("Végponttól végpontig mért p95 késleltetés [ms]")
-    axis.set_ylabel("Car 3D AP40 strict, közepes [%]")
-    axis.set_title("Pontosság–késleltetés Pareto-kép – hat, 20 epochos Car-modell")
+    axis.set_xlabel("End-to-end p95 latency [ms]")
+    axis.set_ylabel("KITTI Car 3D AP40 (moderate, strict) [%]")
+    axis.set_title("Accuracy–latency trade-off — six 20-epoch Car-only models")
     axis.legend(loc="lower right")
     axis.set_axisbelow(True)
     _save(figure, output_dir, FIGURE_PARETO)
@@ -296,14 +296,14 @@ def _render_latency(context: dict[str, Any], output_dir: Path) -> None:
     pred = [_latency(prediction[slug], "prediction_ms") for slug in MODEL_ORDER]
     e2e = [_latency(end_to_end[slug], "end_to_end_ms") for slug in MODEL_ORDER]
     figure, axis = plt.subplots(figsize=(13.333, 7.5), layout="constrained")
-    pred_bars = axis.bar(positions - width / 2, pred, width, label="Csak predikció – p95", color="#4E79A7")
-    e2e_bars = axis.bar(positions + width / 2, e2e, width, label="Végponttól végpontig – p95", color="#F28E2B")
+    pred_bars = axis.bar(positions - width / 2, pred, width, label="Prediction latency (p95)", color="#4E79A7")
+    e2e_bars = axis.bar(positions + width / 2, e2e, width, label="End-to-end latency (p95)", color="#F28E2B")
     axis.bar_label(pred_bars, fmt="%.2f", padding=3, fontsize=10)
     axis.bar_label(e2e_bars, fmt="%.2f", padding=3, fontsize=10)
-    axis.axhline(50, color="#E15759", linewidth=1.8, linestyle=":", label="20 Hz követelmény (50 ms)")
+    axis.axhline(50, color="#E15759", linewidth=1.8, linestyle=":", label="Real-time target (50 ms)")
     axis.set_xticks(positions, [MODEL_LABELS[slug] for slug in MODEL_ORDER], rotation=17)
-    axis.set_ylabel("Késleltetés [ms]")
-    axis.set_title("Predikciós és teljes p95 késleltetés – hat, 20 epochos Car-modell")
+    axis.set_ylabel("Latency [ms]")
+    axis.set_title("Prediction and end-to-end p95 latency — six 20-epoch Car-only models")
     axis.set_ylim(0, 54)
     axis.legend(loc="upper left", ncols=1)
     axis.set_axisbelow(True)
@@ -318,8 +318,8 @@ def _finalist_key(row: dict[str, Any]) -> tuple[str, int]:
     return architecture, 30 if "duration30" in run_id else 20
 
 
-def _hu(value: float) -> str:
-    return f"{value:.2f}".replace(".", ",")
+def _format_value(value: float) -> str:
+    return f"{value:.2f}"
 
 
 def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
@@ -330,14 +330,14 @@ def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
         raise ValueError("A finalista forrás nem a két architektúra párosított 20/30 epochos futásait tartalmazza.")
 
     metric_specs = (
-        ("3D\nkönnyű", "accuracy", "car_3d_ap40_easy_strict"),
-        ("3D\nközepes", "accuracy", "car_3d_ap40_moderate_strict"),
-        ("3D\nnehéz", "accuracy", "car_3d_ap40_hard_strict"),
-        ("BEV\nkönnyű", "accuracy", "car_bev_ap40_easy_strict"),
-        ("BEV\nközepes", "accuracy", "car_bev_ap40_moderate_strict"),
-        ("BEV\nnehéz", "accuracy", "car_bev_ap40_hard_strict"),
-        ("Predikció\np95 [ms]", "latency", "prediction_ms"),
-        ("Teljes\np95 [ms]", "latency", "end_to_end_ms"),
+        ("3D AP40\nEasy", "accuracy", "car_3d_ap40_easy_strict"),
+        ("3D AP40\nModerate", "accuracy", "car_3d_ap40_moderate_strict"),
+        ("3D AP40\nHard", "accuracy", "car_3d_ap40_hard_strict"),
+        ("BEV AP40\nEasy", "accuracy", "car_bev_ap40_easy_strict"),
+        ("BEV AP40\nModerate", "accuracy", "car_bev_ap40_moderate_strict"),
+        ("BEV AP40\nHard", "accuracy", "car_bev_ap40_hard_strict"),
+        ("Prediction\np95 [ms]", "latency", "prediction_ms"),
+        ("End-to-end\np95 [ms]", "latency", "end_to_end_ms"),
     )
     row_keys = (("Voxel0075", 20), ("Voxel0075", 30), ("Pillar02", 20), ("Pillar02", 30))
     values = np.zeros((4, len(metric_specs)), dtype=float)
@@ -351,12 +351,12 @@ def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
             reference = _metric(baseline, key) if kind == "accuracy" else _latency(baseline, key)
             values[row_index, column] = value
             if epoch == 20:
-                annotations[row_index][column] = _hu(value)
+                annotations[row_index][column] = _format_value(value)
                 continue
             delta = value - reference
             is_better = delta > 0 if kind == "accuracy" else delta < 0
             direction[row_index, column] = 1 if is_better else -1 if delta != 0 else 0
-            annotations[row_index][column] = f"{_hu(value)}\n({delta:+.2f})".replace(".", ",")
+            annotations[row_index][column] = f"{_format_value(value)}\n({delta:+.2f})"
 
     figure, axis = plt.subplots(figsize=(13.333, 7.5))
     figure.subplots_adjust(left=0.15, right=0.82, top=0.70, bottom=0.18)
@@ -367,7 +367,7 @@ def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
     axis.set_xticks(np.arange(len(metric_specs)), [item[0] for item in metric_specs])
     axis.set_yticks(
         np.arange(len(row_keys)),
-        [f"{architecture} – {epoch} epoch" for architecture, epoch in row_keys],
+        [f"{architecture} — {epoch} epochs" for architecture, epoch in row_keys],
     )
     axis.tick_params(top=True, bottom=False, labeltop=True, labelbottom=False, length=0)
     axis.set_xticks(np.arange(-0.5, len(metric_specs), 1), minor=True)
@@ -375,15 +375,15 @@ def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
     axis.grid(which="minor", color="white", linestyle="-", linewidth=2)
     axis.grid(which="major", visible=False)
     figure.suptitle(
-        "Finalisták eredménymátrixa – a 30 epoch hatása",
+        "Finalist result matrix — KITTI AP40 and p95 latency",
         fontsize=21,
         y=0.98,
     )
     axis.legend(
         handles=(
-            Patch(facecolor="#ECECEC", label="20 epochos referencia"),
-            Patch(facecolor="#B8D8BA", label="javulás 30 epochnál"),
-            Patch(facecolor="#F4B6B2", label="romlás 30 epochnál"),
+            Patch(facecolor="#ECECEC", label="20-epoch reference"),
+            Patch(facecolor="#B8D8BA", label="Improved at 30 epochs"),
+            Patch(facecolor="#F4B6B2", label="Degraded at 30 epochs"),
         ),
         loc="center left",
         bbox_to_anchor=(1.01, 0.5),
@@ -391,7 +391,7 @@ def _render_finalists(context: dict[str, Any], output_dir: Path) -> None:
         frameon=False,
     )
     axis.set_xlabel(
-        "A zárójelben a 30 − 20 epoch különbség látható; az AP40 mértékegysége százalékpont.",
+        "Parentheses show the 30 − 20 epoch difference; AP40 is reported in percentage points.",
         labelpad=24,
         fontsize=11.5,
     )
@@ -423,11 +423,11 @@ def _render_multiclass(context: dict[str, Any], output_dir: Path) -> None:
         for row in range(matrix.shape[0]):
             for column in range(matrix.shape[1]):
                 color = "white" if matrix[row, column] >= 58 else "#1F1F1F"
-                axis.text(column, row, _hu(float(matrix[row, column])), ha="center", va="center", color=color, fontsize=15, fontweight="bold")
+                axis.text(column, row, _format_value(float(matrix[row, column])), ha="center", va="center", color=color, fontsize=15, fontweight="bold")
         axis.set_xticks(np.arange(3), DIFFICULTY_LABELS)
         axis.set_yticks(np.arange(3), CLASSES)
-        axis.set_xlabel("Nehézségi szint")
-        axis.set_title(f"{domain} AP40 strict")
+        axis.set_xlabel("Difficulty")
+        axis.set_title(f"KITTI {domain} AP40 (strict)")
         axis.set_xticks(np.arange(-0.5, 3, 1), minor=True)
         axis.set_yticks(np.arange(-0.5, 3, 1), minor=True)
         axis.grid(which="minor", color="white", linestyle="-", linewidth=2)
@@ -435,9 +435,9 @@ def _render_multiclass(context: dict[str, Any], output_dir: Path) -> None:
         axis.tick_params(which="both", length=0)
     assert rendered is not None
     colorbar = figure.colorbar(rendered, ax=axes, shrink=0.86, pad=0.025)
-    colorbar.set_label("AP40 strict [%]")
+    colorbar.set_label("AP40 (strict) [%]")
     figure.suptitle(
-        "Pillar02 többosztályos eredmény – osztályonkénti AP40 strict",
+        "Pillar02 multiclass results — class-wise AP40 (strict)",
         fontsize=21,
         y=0.96,
     )
@@ -445,8 +445,8 @@ def _render_multiclass(context: dict[str, Any], output_dir: Path) -> None:
     figure.text(
         0.5,
         0.035,
-        f"Külön 60 epochos kísérlet; kijelölt checkpoint: 55. epoch; teljes p95: {_hu(e2e_p95)} ms. "
-        "Nem rangsorolható közvetlenül a hat 20 epochos Car-modellel.",
+        f"Separate 60-epoch experiment; selected checkpoint: epoch 55; end-to-end p95: {_format_value(e2e_p95)} ms. "
+        "Not directly rankable against the six 20-epoch Car-only models.",
         ha="center",
         fontsize=10.5,
     )

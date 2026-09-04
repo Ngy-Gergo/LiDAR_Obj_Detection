@@ -6,6 +6,11 @@ kiértékelést, benchmarkot vagy modellbetöltést. A
 `research/evaluations/summary.csv` és a `research/benchmarks/summary.csv` nem
 adatforrás.
 
+Az evidence manifest és a magyarázó szöveg magyar. A négy végleges ábra belső,
+felhasználó által olvasott címei, tengelyfeliratai, jelmagyarázatai, mátrix- és
+táblázatfejlécei, annotációi és megjegyzései viszont tudatosan angol nyelvűek,
+hogy a prezentáció nemzetközi közönség számára is közvetlenül olvasható legyen.
+
 ## Teljes reprodukció
 
 A repository gyökeréből futtatandó parancs:
