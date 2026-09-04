@@ -42,6 +42,22 @@ was not recorded. Exact semantic dataset identity and train/validation
 annotation hashes match. These remain single-seed validation results, not
 untouched sealed-test or statistical-significance claims.
 
+## External pretrained KITTI references
+
+A same-dataset comparison against official pretrained MMDetection3D
+PointPillars and SECOND references is available in
+[`../research/reports/20260902-pretrained-baseline-comparison/`](../research/reports/20260902-pretrained-baseline-comparison/).
+
+The official references lead the project-trained finalists in KITTI AP40,
+while project Pillar30 remains the fastest model and project Voxel20 has the
+lowest measured GPU-memory footprint. This comparison is not an equal-budget
+training ablation: the external references use substantially longer and more
+mature training recipes.
+
+The protected live-demo selection remains unchanged because only the project
+CenterPoint models have completed ROS2/Foxglove, tracking, reset, and real
+recording acceptance.
+
 ## Training decision
 
 No additional training was started. The available presentation training
